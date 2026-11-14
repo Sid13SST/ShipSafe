@@ -1,0 +1,24 @@
+# Weekly report on binary tool pins Dependabot cannot update (Gitleaks,
+# hadolint, Trivy in scripts/install_*.sh). Report only: the job summary lists
+# pinned vs latest; it does not fail on staleness and never changes anything.
+name: pin-freshness
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"   # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    name: binary tool pins vs upstream releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare pinned versions with upstream release tags
+        run: bash scripts/check_binary_pins.sh

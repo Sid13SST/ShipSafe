@@ -1,0 +1,55 @@
+# Dependabot: proposes pin bumps as PRs for the repo owner to review.
+# It never merges anything; every bump goes through CI (all gates + self-tests).
+#
+# cooldown: wait 7 days after a release before proposing it. Freshly
+# published releases are the riskiest (in March 2026 malicious Trivy releases
+# and hijacked action tags were live for hours before being pulled).
+#
+# NOT covered here: the Gitleaks / hadolint / Trivy binaries pinned by
+# version + SHA-256 inside scripts/install_*.sh. Dependabot cannot update
+# those; scripts/check_binary_pins.sh (weekly workflow pin-freshness.yml)
+# reports newer releases, and bumping them is a manual, reviewed change
+# (verify upstream checksums/signatures, then update the hashes).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /                 # .github/workflows - SHA pins + "# vX.Y.Z" comments
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(actions)"
+
+  - package-ecosystem: pip
+    directory: /scripts           # requirements-tools.in -> hash-pinned requirements-tools.txt
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      gate-tools:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(tools)"
+
+  - package-ecosystem: pip
+    directory: /demo-app          # requirements(.dev).in -> hash-pinned .txt locks
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps(demo-app)"
+
+  - package-ecosystem: docker
+    directory: /demo-app          # FROM python:<tag>@sha256:<digest>
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps(docker)"
