@@ -1,4 +1,6 @@
 .venv/
+.venv-tools/
+semgrep-report.json
 __pycache__/
 *.pyc
 .pytest_cache/

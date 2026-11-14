@@ -1,2 +1,5 @@
 # Pinned versions of the free/open-source tools the gates run.
+# Install into a venv separate from the demo app: semgrep pins
+# opentelemetry-api older than fastapi allows, so they conflict.
 pip-audit==2.10.1
+semgrep==1.185.0
