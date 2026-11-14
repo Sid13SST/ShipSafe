@@ -117,7 +117,7 @@ Status: `[x]` done, `[ ]` not started.
 - [ ] Optional SARIF upload to GitHub code scanning (free for public repos) - documented only
 - [x] Dependabot config for action + tool pin updates (+ binary pin freshness report)
 
-## Batch 7 - Docs polish  `[ ]`
+## Batch 7 - Docs polish  `[x]`
 
-- [ ] README walkthrough with real CI run output for pass and fail cases
-- [ ] "Limitations" section reviewed against final behaviour of every gate
+- [x] README walkthrough with real CI run output for pass and fail cases (run #6 excerpts)
+- [x] "Limitations" section reviewed against final behaviour of every gate (README summary added; green-run wording corrected)
