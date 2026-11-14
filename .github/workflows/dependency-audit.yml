@@ -5,9 +5,9 @@
 # (fails closed). A pass is "no known advisory matched at run time", not a
 # guarantee that the dependencies are secure.
 #
-# Current scope: called from workflows in this repository (it runs
-# scripts/dependency_audit.py from the checked-out repo). Packaging for use
-# from other repositories is planned - see docs/TASKS.md.
+# Reuse: runs ShipSafe's scripts from a separate checkout of the tooling
+# repository at a pinned commit (see docs/REUSE.md). The caller's workspace
+# supplies only the code to scan and its .shipsafe/waivers.yml.
 name: dependency-audit (reusable)
 
 on:
@@ -22,6 +22,24 @@ on:
         required: false
         type: string
         default: "3.13"
+      tooling-repository:
+        description: >-
+          Repository that provides ShipSafe's gate scripts. Empty = the calling
+          repository (ShipSafe's own CI). Cross-repo callers set "Sid13SST/ShipSafe".
+        required: false
+        type: string
+        default: ""
+      tooling-ref:
+        description: >-
+          Commit of the tooling to run. Empty = the triggering commit. Cross-repo
+          callers MUST pass the full 40-character SHA used in their `uses:` line.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      tooling-token:
+        description: Read-only token for the tooling repository (only needed while it is private).
+        required: false
 
 permissions:
   contents: read
@@ -35,15 +53,43 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Resolve ShipSafe tooling ref
+        id: tooling
+        env:
+          TOOLING_REPO: ${{ inputs.tooling-repository || github.repository }}
+          TOOLING_REF: ${{ inputs.tooling-ref || github.sha }}
+          CALLER_REPO: ${{ github.repository }}
+        run: |
+          if [ "$TOOLING_REPO" != "$CALLER_REPO" ] && ! [[ "$TOOLING_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tooling-ref must be a full 40-character commit SHA when ShipSafe runs from another repository (got '$TOOLING_REF'). Branches and tags can move."
+            exit 1
+          fi
+          echo "repo=$TOOLING_REPO" >> "$GITHUB_OUTPUT"
+          echo "ref=$TOOLING_REF" >> "$GITHUB_OUTPUT"
+      - name: Check out ShipSafe tooling at the pinned ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.tooling.outputs.repo }}
+          ref: ${{ steps.tooling.outputs.ref }}
+          token: ${{ secrets.tooling-token || github.token }}
+          path: .shipsafe-tooling
+          persist-credentials: false
+      - name: Move tooling out of the scanned workspace
+        env:
+          TOOLING_REPO: ${{ steps.tooling.outputs.repo }}
+        run: |
+          mv .shipsafe-tooling "$RUNNER_TEMP/shipsafe"
+          echo "SHIPSAFE=$RUNNER_TEMP/shipsafe" >> "$GITHUB_ENV"
+          echo "ShipSafe tooling $(git -C "$RUNNER_TEMP/shipsafe" rev-parse HEAD) from $TOOLING_REPO"
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ inputs.python-version }}
       - name: Install pinned audit tooling
-        run: python -m pip install --disable-pip-version-check --require-hashes -r scripts/requirements-tools.txt
+        run: python -m pip install --disable-pip-version-check --require-hashes -r "$SHIPSAFE/scripts/requirements-tools.txt"
       - name: Run dependency-audit gate
         env:
           REQUIREMENTS: ${{ inputs.requirements }}
         # Split the space-separated list into an array (no globbing).
         run: |
           read -r -a files <<< "$REQUIREMENTS"
-          python scripts/dependency_audit.py "${files[@]}"
+          python "$SHIPSAFE/scripts/dependency_audit.py" "${files[@]}"
