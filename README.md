@@ -15,7 +15,7 @@ real issues.
 | Gate | Tool | Status |
 |------|------|--------|
 | Dependency vulnerability audit | [pip-audit](https://github.com/pypa/pip-audit) | Implemented |
-| SAST | [Semgrep](https://github.com/semgrep/semgrep) (OSS) | Planned |
+| SAST | [Semgrep](https://github.com/semgrep/semgrep) OSS CLI, vendored rules, offline | Implemented |
 | Secrets detection | [Gitleaks](https://github.com/gitleaks/gitleaks) | Planned |
 | Dockerfile lint | [hadolint](https://github.com/hadolint/hadolint) | Planned |
 | Container image scan | [Trivy](https://github.com/aquasecurity/trivy) | Planned |
@@ -40,6 +40,7 @@ Gates fail closed: if a tool cannot complete the audit, the gate reports
 .github/workflows/   CI entry (ci.yml) and reusable gate workflows
 demo-app/            minimal FastAPI app (the clean target)
 fixtures/            DELIBERATELY VULNERABLE samples - never install or run
+rules/semgrep/       vendored, reviewed Semgrep rules + their annotated tests
 scripts/             gate logic + self-test scripts (same code in CI and locally)
 docs/                DESIGN.md (architecture, scope), TASKS.md (build plan)
 ```
@@ -47,17 +48,14 @@ docs/                DESIGN.md (architecture, scope), TASKS.md (build plan)
 ## Quick start (local)
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r scripts/requirements-tools.txt -r demo-app/requirements.txt -r demo-app/requirements-dev.txt
+python3 -m venv .venv-tools && .venv-tools/bin/pip install -r scripts/requirements-tools.txt -r demo-app/requirements-dev.txt
 ```
 
 ```bash
-bash scripts/verify_dependency_audit.sh
+. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh
 ```
 
-```bash
-cd demo-app && python -m pytest -q
-```
+The demo app uses its own venv (`.venv`); see [CLAUDE.md](CLAUDE.md).
 
 More commands, conventions, and CI job descriptions: [CLAUDE.md](CLAUDE.md).
 Design and per-gate limitations: [docs/DESIGN.md](docs/DESIGN.md).

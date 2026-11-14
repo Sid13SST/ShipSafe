@@ -22,13 +22,16 @@ Status: `[x]` done, `[ ]` not started.
 - [x] Offline unit tests in `scripts/tests/`
 - Verification: demo-app tests, gate unit tests, self-test script, actionlint+shellcheck
 
-## Batch 2 - SAST gate (Semgrep)  `[ ]`
+## Batch 2 - SAST gate (Semgrep)  `[x]`
 
-- [ ] Pin Semgrep OSS CLI; vendor a small, reviewed Python/FastAPI rule set (no login/registry dependency)
-- [ ] `scripts/sast.py` parsing Semgrep JSON; fail on ERROR/WARNING severity findings
-- [ ] `fixtures/sast/` - e.g. `shell=True` with request input, unsafe `yaml.load`, `eval`
-- [ ] Reusable `sast.yml`; app scan excludes `fixtures/`
-- [ ] `scripts/verify_sast.sh` + unit tests
+- [x] Pin Semgrep OSS CLI (1.185.0); vendor 10 reviewed Python/FastAPI rules in `rules/semgrep/` (no login/registry)
+- [x] Annotated rule tests (`semgrep --test`), one positive + negative case per rule
+- [x] `scripts/sast.py` parsing Semgrep JSON; fail on ERROR/WARNING; INFO reported only; fail closed on
+      semgrep errors, skipped rules, 0 files scanned, forbidden paths scanned, unparseable Python
+- [x] `fixtures/sast/vulnerable_app.py` - `shell=True`/`os.system` with request input, `yaml.load`, `eval`, f-string SQL, `pickle.loads`
+- [x] Reusable `sast.yml`; project scan targets repo root with explicit `fixtures/` exclude + forbid guard
+- [x] `scripts/verify_sast.sh` + offline unit tests (`scripts/tests/test_sast.py`)
+- Verification: rule tests, unit tests, self-test script, actionlint+shellcheck
 
 ## Batch 3 - Secrets gate (Gitleaks)  `[ ]`
 
@@ -55,6 +58,8 @@ Status: `[x]` done, `[ ]` not started.
 
 - [ ] Waiver mechanism (`.shipsafe/waivers.yml`: id, reason, expiry; expired waivers fail)
 - [ ] Hash-pin tool installs (`--require-hashes`)
+- [ ] Dependency-audit `scripts/requirements-tools.txt` itself (tool supply chain)
+- [ ] Decide whether SAST should also scan `tests/` directories (Semgrep skips them by default)
 - [ ] Cross-repo reuse: workflows check out ShipSafe scripts at a pinned ref (or composite actions); usage example
 - [ ] Optional SARIF upload to GitHub code scanning (free for public repos)
 - [ ] Dependabot/Renovate config for action + tool pin updates

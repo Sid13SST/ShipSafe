@@ -90,12 +90,60 @@ confidence, which is worse than no gate.
   - No allowlist/waiver mechanism yet (planned; waivers must carry an expiry
     and reason).
 
-### 2. SAST - Semgrep (planned)
+### 2. SAST - Semgrep (implemented, Batch 2)
 
-Semgrep OSS CLI with pinned, vendored open rules (Python/FastAPI), run on
-`demo-app/`; fixture with e.g. `subprocess(..., shell=True)` on user input and
-`yaml.load` without a safe loader. Blind spots: pattern-based, intra-file for
-the OSS engine, misses business-logic flaws.
+- **Tool:** Semgrep OSS CLI, pinned (`semgrep==1.185.0`), run with
+  `--oss-only --metrics=off --disable-version-check` and a local `--config`
+  only. No account, token, registry rules, or network access is used.
+- **Rules:** `rules/semgrep/python-security.yml`, 10 hand-written, reviewed
+  rules. Each has positive and negative cases in
+  `rules/semgrep/python-security.py`, checked by `semgrep --test`.
+
+  | Rule | Severity | Catches |
+  |------|----------|---------|
+  | `fastapi-input-to-shell` | ERROR | taint: FastAPI route param -> `subprocess(..., shell=True)` / `os.system` / `os.popen` |
+  | `subprocess-shell-true` | WARNING | any `subprocess.*(..., shell=True)` |
+  | `os-system-non-literal` | ERROR | `os.system`/`os.popen` with a non-constant command |
+  | `yaml-unsafe-load` | ERROR | `yaml.load` without a safe Loader, `yaml.unsafe_load` |
+  | `eval-exec-non-literal` | ERROR | `eval`/`exec` of a non-constant |
+  | `sql-string-formatting` | ERROR | `execute()` with f-string / `%` / `.format` / `+` SQL |
+  | `pickle-load` | WARNING | `pickle.load(s)` |
+  | `requests-verify-false` | WARNING | `requests.*(..., verify=False)` |
+  | `fastapi-cors-wildcard-credentials` | WARNING | CORS `allow_origins=["*"]` with credentials |
+  | `weak-hash` | INFO | `hashlib.md5` / `sha1` (reported, never fails) |
+
+- **Target:** the repository root, so new code is scanned by default, with
+  explicit `--exclude fixtures/` and `--exclude rules/semgrep/python-security.py`
+  (both deliberately vulnerable). `--forbid-path fixtures/` makes the gate
+  ERROR if a fixture is scanned anyway, so a broken or removed exclude gives
+  a clear error instead of mixing fixture findings into the project result.
+- **Fails on:** any finding with severity ERROR or WARNING (and the newer
+  CRITICAL/HIGH/MEDIUM names, or any severity it does not recognise).
+  INFO/LOW findings are reported but do not fail.
+- **Errors on (fails closed):** semgrep non-zero exit or missing/invalid
+  report, any entry in the report's `errors`, skipped rules, zero files
+  scanned, a forbidden path scanned, or a scanned `.py` file that Python's
+  `ast` cannot parse.
+- **Fixture:** `fixtures/sast/vulnerable_app.py` - FastAPI handlers with
+  command injection, `yaml.load`, `eval`, f-string SQL and `pickle.loads`. The
+  first statement raises, so it cannot be imported or run.
+- **Blind spots / honest notes:**
+  - Pattern matching over a small rule set. Anything the 10 rules don't
+    describe - auth flaws, business logic, SSRF, path traversal, most
+    framework-specific issues - passes.
+  - Semgrep OSS taint tracking is intra-procedural: input passed through a
+    helper function before reaching a shell is caught only by the generic
+    (non-taint) rules, if at all.
+  - Semgrep skips `tests/` directories by default, so test code is not
+    scanned (tracked as a decision in TASKS.md).
+  - Semgrep 1.185.0 reports no error for files it cannot parse (its parser
+    recovers silently). The gate compensates for Python with its own `ast`
+    check; non-Python files get no such check.
+  - The `ast` check uses the runner's Python (3.13); code using newer syntax
+    would be reported as ERROR.
+  - False positives are possible (e.g. `shell=True` with a constant command
+    still raises a WARNING). There is no inline-suppression policy yet;
+    `# nosemgrep` works but should be reviewed like a waiver (Batch 6).
 
 ### 3. Secrets detection - Gitleaks (planned)
 
