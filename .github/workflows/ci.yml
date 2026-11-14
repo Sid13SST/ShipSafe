@@ -1,5 +1,6 @@
 # ShipSafe CI: demo-app tests, gate unit tests, the security gates
-# (dependency audit, SAST, secrets) on the clean project, and gate self-tests against
+# (dependency audit, SAST, secrets, Dockerfile lint) on the clean project, a demo
+# image build check, and gate self-tests against
 # the deliberately vulnerable fixtures/ (which must FAIL each gate).
 name: ci
 
@@ -125,3 +126,40 @@ jobs:
           echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
       - name: Assert gate passes on project and fails on fixtures/
         run: bash scripts/verify_secrets.sh
+
+  dockerfile-lint:
+    name: gate - Dockerfile lint (fixtures/ excluded)
+    uses: ./.github/workflows/dockerfile-lint.yml
+    with:
+      discover: .
+      exclude: fixtures/
+      forbid-paths: fixtures/
+
+  dockerfile-lint-self-test:
+    name: self-test - Dockerfile gate catches fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned hadolint (checksum verified)
+        run: |
+          bash scripts/install_hadolint.sh "$RUNNER_TEMP/hadolint-bin"
+          echo "$RUNNER_TEMP/hadolint-bin" >> "$GITHUB_PATH"
+      - name: Assert gate passes on project and fails on fixtures/
+        run: bash scripts/verify_dockerfile_lint.sh
+
+  demo-image:
+    name: demo image builds and runs as non-root
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build demo-app image and check uid, healthcheck and API
+        run: bash scripts/verify_demo_image.sh demo-app

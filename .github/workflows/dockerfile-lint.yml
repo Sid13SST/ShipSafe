@@ -1,0 +1,69 @@
+# Reusable Dockerfile gate (hadolint, pinned binary, + ShipSafe policy checks).
+#
+# Installs the pinned hadolint release with scripts/install_hadolint.sh
+# (SHA-256 verified) and lints every Dockerfile found under `discover`
+# except excluded paths. Fails on hadolint warning/error findings and on the
+# ShipSafe policy checks (digest-pinned base, non-root USER, no ADD from URL,
+# no secret-named ARG/ENV); fails closed if nothing could be linted. A pass
+# means the Dockerfile text passed these lint rules - it says nothing about
+# vulnerabilities inside the image.
+#
+# Current scope: called from workflows in this repository. Cross-repo
+# packaging is planned - see docs/TASKS.md.
+name: dockerfile-lint (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      discover:
+        description: Directory to search for Dockerfiles.
+        required: false
+        type: string
+        default: "."
+      exclude:
+        description: Space-separated path prefixes to skip during discovery.
+        required: false
+        type: string
+        default: ""
+      forbid-paths:
+        description: Space-separated paths that must never be linted (gate errors if they are).
+        required: false
+        type: string
+        default: ""
+      python-version:
+        description: Python version used to run the gate script.
+        required: false
+        type: string
+        default: "3.13"
+
+permissions:
+  contents: read
+
+jobs:
+  hadolint:
+    name: hadolint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install pinned hadolint (checksum verified)
+        run: |
+          bash scripts/install_hadolint.sh "$RUNNER_TEMP/hadolint-bin"
+          echo "$RUNNER_TEMP/hadolint-bin" >> "$GITHUB_PATH"
+      - name: Run Dockerfile gate
+        env:
+          DISCOVER: ${{ inputs.discover }}
+          EXCLUDE: ${{ inputs.exclude }}
+          FORBID: ${{ inputs.forbid-paths }}
+        run: |
+          read -r -a excludes <<< "$EXCLUDE"
+          read -r -a forbids <<< "$FORBID"
+          args=(--discover "$DISCOVER")
+          for e in "${excludes[@]}"; do args+=(--exclude "$e"); done
+          for f in "${forbids[@]}"; do args+=(--forbid-path "$f"); done
+          python scripts/dockerfile_lint.py "${args[@]}"
