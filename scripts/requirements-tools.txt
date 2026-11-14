@@ -1,0 +1,2 @@
+# Pinned versions of the free/open-source tools the gates run.
+pip-audit==2.10.1
