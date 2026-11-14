@@ -1,0 +1,11 @@
+# DELIBERATELY VULNERABLE FIXTURE - DO NOT BUILD, RUN, OR COPY.
+#
+# Used only by scripts/verify_container_scan.sh to prove the container-scan
+# gate's config scan (`trivy config`) FAILS on Dockerfile misconfigurations.
+# It is scanned as text and never built. The URL uses the reserved .invalid
+# TLD (RFC 2606), so it can never resolve.
+FROM debian:latest
+RUN apt-get update && apt-get install -y sudo curl
+ADD https://downloads.example.invalid/app.tar.gz /opt/
+USER root
+CMD ["/bin/bash"]

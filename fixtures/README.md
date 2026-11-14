@@ -18,14 +18,16 @@ Rules for fixtures:
   so a broken exclude makes the gate error; the secrets gate allowlists
   exactly `^(\./)?fixtures/` in `.gitleaks.toml`, and its self-test proves
   that nothing outside `fixtures/` is hidden; the Dockerfile gate excludes
-  `fixtures/` from discovery and passes `--forbid-path fixtures/`). Trivy
-  will follow the same rule.
+  `fixtures/` from discovery and passes `--forbid-path fixtures/`; the
+  Trivy config scan uses `--skip-dir fixtures --forbid-path fixtures/`).
 
 | Path | Gate | Seeded issue |
 |------|------|--------------|
 | `dependency-audit/vulnerable-requirements.txt` | dependency audit (pip-audit) | Old pins with published advisories |
 | `secrets/fake-credentials.env`, `fake_settings.py`, `fake_private_key.pem` | secrets (Gitleaks) | Made-up, never-issued AWS key ID, GitHub-style token (invalid checksum), generic API key, and a PEM-shaped block with a plain-text body. They match Gitleaks default rules and authenticate against nothing. |
 | `dockerfile/Dockerfile.vulnerable` | Dockerfile lint (hadolint + policy) | `MAINTAINER`, `python:latest` (no digest), secret-named `ENV`, `ADD` from a URL on the reserved `.invalid` TLD, unpinned apt/pip installs, `cd` in RUN, `curl \| sh` without pipefail, `USER root`, shell-form `CMD`. Never built. |
+| `container-scan/old-base-image.txt` | container scan (Trivy image) | Digest-pinned reference to `python:3.11.4-slim-bookworm` (Debian 12.1, 2023): many fixable HIGH/CRITICAL vulns, runs as root, no HEALTHCHECK. Read from the registry with `--image-src remote`; never pulled into Docker, never run. |
+| `container-scan/Dockerfile.misconfig` | container scan (Trivy config) | `debian:latest`, apt without `--no-install-recommends`, `ADD` from a `.invalid` URL, `USER root`, no HEALTHCHECK. Never built. |
 | `sast/vulnerable_app.py` | SAST (Semgrep) | FastAPI handlers with command injection (`shell=True`, `os.system`), `yaml.load`, `eval`, f-string SQL, `pickle.loads`. Raises on import. |
 
 `rules/semgrep/python-security.py` (outside this directory) is also

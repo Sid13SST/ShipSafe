@@ -1,0 +1,12 @@
+# DELIBERATELY VULNERABLE FIXTURE - SCAN ONLY. NEVER RUN, BUILD ON, OR DEPLOY.
+#
+# A digest-pinned reference to an old public image (python:3.11.4 on Debian
+# 12.1, from 2023). scripts/verify_container_scan.sh scans it with
+# `trivy image --image-src remote`: Trivy reads the layers straight from the
+# registry; no container is ever created or started from it.
+#
+# Expected: many HIGH/CRITICAL OS + Python package vulnerabilities that have
+# fixed versions available, and image-config misconfigurations (runs as root,
+# no HEALTHCHECK). Exact counts change as advisories are published.
+# The single non-comment line below is the image reference.
+mirror.gcr.io/library/python:3.11.4-slim-bookworm@sha256:17d62d681d9ecef20aae6c6605e9cf83b0ba3dc247013e2f43e1b5a045ad4901
