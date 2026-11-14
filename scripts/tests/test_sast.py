@@ -166,7 +166,7 @@ def test_main_passes_offline_flags_and_excludes(tmp_path: Path, target: Path) ->
     saved = tmp_path / "raw.json"
     sast.main([str(target), "--exclude", "fixtures/", "--semgrep", fake, "--report", str(saved)])
     argv = json.loads((tmp_path / "argv.json").read_text())
-    for flag in ["--metrics=off", "--disable-version-check", "--oss-only", "--json"]:
+    for flag in ["--metrics=off", "--disable-version-check", "--oss-only", "--json", "--disable-nosem"]:
         assert flag in argv
     assert argv[argv.index("--exclude") + 1] == "fixtures/"
     assert argv[argv.index("--config") + 1].endswith("rules/semgrep/python-security.yml")
@@ -179,3 +179,23 @@ def test_main_writes_github_step_summary(tmp_path: Path, target: Path, monkeypat
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     sast.main([str(target), "--semgrep", fake_semgrep(tmp_path, report(scanned=[str(target / "main.py")]))])
     assert "SAST" in summary.read_text() and "PASS" in summary.read_text()
+
+
+@pytest.mark.parametrize("where", ["root", "nested"])
+def test_semgrepignore_is_error_and_semgrep_not_run(tmp_path: Path, target: Path, where: str,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    d = target if where == "root" else target / "sub"
+    d.mkdir(exist_ok=True)
+    (d / ".semgrepignore").write_text("main.py\n")
+    fake = fake_semgrep(tmp_path, report(scanned=[str(target / "main.py")]))
+    assert sast.main([str(target), "--semgrep", fake]) == sast.EXIT_ERROR
+    assert not (tmp_path / "argv.json").exists(), "semgrep must not run"
+
+
+def test_semgrepignore_in_cwd_is_error(tmp_path: Path, target: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    (cwd / ".semgrepignore").write_text("*\n")
+    monkeypatch.chdir(cwd)
+    assert sast.semgrepignore_files([str(target)]) == [str(cwd / ".semgrepignore")]

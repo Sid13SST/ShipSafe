@@ -17,6 +17,12 @@ of 1.185.0, reports no error for files it cannot parse - they count as
 scanned with no findings. The gate therefore re-parses every scanned .py
 file with Python's own `ast` and treats a failure as ERROR.
 
+Suppression: inline `# nosemgrep` comments are ignored (--disable-nosem) and
+the gate ERRORs if a .semgrepignore file exists in a target or the working
+directory (it would silently drop files from the scan). Exclusions must be
+explicit --exclude flags, which live in the reviewed workflow; exceptions for
+individual findings go through waivers.
+
 Waivers: failing findings can be waived for a limited time in
 .shipsafe/waivers.yml (gate: sast; id = rule id, e.g.
 shipsafe.subprocess-shell-true; optional scope = file path or glob). An
@@ -161,6 +167,24 @@ def unparseable_python(paths: list[str]) -> list[str]:
     return problems
 
 
+def semgrepignore_files(targets: list[str], cwd: Path | None = None) -> list[str]:
+    """.semgrepignore files that would silently exclude files from the scan."""
+    hits: set[str] = set()
+    roots = [Path(t) for t in targets] + [cwd or Path.cwd()]
+    for root in roots:
+        if root.is_file():
+            root = root.parent
+        if not root.is_dir():
+            continue
+        if (root / ".semgrepignore").is_file():
+            hits.add(str(root / ".semgrepignore"))
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d != ".git"]
+            if ".semgrepignore" in filenames:
+                hits.add(str(Path(dirpath) / ".semgrepignore"))
+    return sorted(hits)
+
+
 def render(result: ScanResult, label: str) -> str:
     verdict = {EXIT_PASS: "PASS", EXIT_FAIL: "FAIL", EXIT_ERROR: "ERROR"}[result.exit_code]
     lines = [
@@ -197,6 +221,7 @@ def run_semgrep(semgrep: str, config: Path, targets: list[str], excludes: list[s
             "--metrics=off",           # no telemetry
             "--disable-version-check",  # no network call to check for updates
             "--oss-only",              # open-source engine only
+            "--disable-nosem",         # inline `# nosemgrep` does not suppress
             "--quiet",
         ]
         for ex in excludes:
@@ -234,8 +259,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     label = " ".join(args.targets)
+    ignores = semgrepignore_files(args.targets)
     if not args.config.is_file():
         text, code = f"sast [{label}]: ERROR - rules file not found: {args.config}", EXIT_ERROR
+    elif ignores:
+        text = (f"sast [{label}]: ERROR - {', '.join(ignores)} present: exclusions must be explicit "
+                "--exclude flags in the reviewed workflow, not a .semgrepignore file")
+        code = EXIT_ERROR
     else:
         try:
             report = run_semgrep(args.semgrep, args.config, args.targets, args.exclude, args.report)

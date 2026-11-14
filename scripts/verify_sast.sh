@@ -8,6 +8,8 @@
 #   4. project scan WITHOUT the fixtures/ exclude              -> ERROR (exit 2): forbid-path guard trips
 #   5. a .py file that is not valid Python                     -> ERROR (exit 2): fails closed
 #   6. a file with only an INFO-severity finding               -> PASS  (exit 0): threshold respected
+#   7. an inline `# nosemgrep` comment                         -> FAIL  (exit 1): not honoured
+#   8. a .semgrepignore file in the target                     -> ERROR (exit 2): not honoured
 #
 # Needs semgrep on PATH (pip install -r scripts/requirements-tools.txt).
 # Needs no network access and no Semgrep account.
@@ -78,6 +80,17 @@ check "invalid python fails closed" 2 "ERROR" "not valid Python" -- "$TMP/broken
 # 6. INFO-only findings are reported but do not fail.
 printf 'import hashlib\n\nhashlib.md5(b"checksum only")\n' > "$TMP/info/checksum.py"
 check "INFO severity does not fail" 0 "PASS" "shipsafe.weak-hash (informational" -- "$TMP/info"
+
+# 7. Inline `# nosemgrep` must not suppress a finding.
+mkdir -p "$TMP/nosem"
+printf 'def calc(expr):\n    return eval(expr)  # nosemgrep\n' > "$TMP/nosem/calc.py"
+check "inline nosemgrep ignored" 1 "shipsafe.eval-exec-non-literal" -- "$TMP/nosem"
+
+# 8. A .semgrepignore must not silently drop files from the scan.
+mkdir -p "$TMP/semignore"
+printf 'def calc(expr):\n    return eval(expr)\n' > "$TMP/semignore/calc.py"
+printf 'calc.py\n' > "$TMP/semignore/.semgrepignore"
+check ".semgrepignore refused" 2 "ERROR" ".semgrepignore present" -- "$TMP/semignore"
 
 if [ "$failures" -ne 0 ]; then
   echo "sast self-test: $failures expectation(s) NOT met"; exit 1
