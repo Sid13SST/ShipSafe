@@ -194,10 +194,63 @@ confidence, which is worse than no gate.
   - No waiver path for genuine false positives yet other than a reviewed
     change to `.gitleaks.toml` and its unit test.
 
-### 4. Dockerfile lint - hadolint (planned)
+### 4. Dockerfile lint - hadolint + ShipSafe policy (implemented, Batch 4)
 
-hadolint on `demo-app/Dockerfile` with a failure threshold of `warning`;
-fixture Dockerfile with `latest` tags, `ADD` of URLs, running as root.
+- **Tool:** hadolint 2.14.0 (GPL-3.0), installed by
+  `scripts/install_hadolint.sh` with the version and per-platform SHA-256
+  pinned in the repo. The hashes come from the release's per-asset `.sha256`
+  files; the linux-x86_64 binary was also byte-identical to `/bin/hadolint` in
+  the official `hadolint/hadolint:v2.14.0` image. 2.15.1 exists but publishes
+  no checksum files that could be verified from the build environment, so it
+  was not pinned (pinning a self-computed hash would be trust-on-first-use).
+- **Target:** every file named `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`
+  or `Containerfile` under the repo root, excluding `fixtures/` (and `.git`,
+  `.venv*`, `.tools`). `--forbid-path fixtures/` makes the gate ERROR if a
+  fixture is selected anyway. Today that is one file, `demo-app/Dockerfile`.
+- **Fails on:** any hadolint finding at `warning` or `error` (matching
+  `failure-threshold: warning` in `.hadolint.yaml`); `info`/`style` are
+  reported only. Plus four ShipSafe policy checks, all failing:
+
+  | Check | Catches | Why hadolint alone is not enough |
+  |-------|---------|----------------------------------|
+  | SS001 | `FROM` without `@sha256:` digest (except `scratch` and stage names) | DL3006/DL3007 only catch untagged/`latest`; a tag can be re-pointed |
+  | SS002 | final stage with no `USER`, or last `USER` root/0 | DL3002 only fires when `USER root` is written explicitly |
+  | SS003 | `ADD` with an `http(s)://`/`ftp://` source | no hadolint rule for unverified remote ADD |
+  | SS004 | `ARG`/`ENV` named like a secret (password, token, secret, api key, private/access key, credential) | build args and ENV persist in image metadata/history |
+
+- **Errors on (fails closed):** no Dockerfiles selected, missing file or
+  config, hadolint non-zero exit (it runs with `--no-fail`) or invalid JSON,
+  a `DL1000` parse failure, a file with no `FROM` (hadolint returns no
+  findings for an empty file), a forbidden path selected.
+- **Suppression:** inline `# hadolint ignore=` pragmas are disabled
+  (`--disable-ignore-pragma`), `HADOLINT_*` env vars are stripped (hadolint
+  reads threshold/ignore settings from them), and `.hadolint.yaml` may only set
+  the threshold - a unit test fails if it gains `ignored`, `override` or
+  `trustedRegistries`.
+- **Demo Dockerfile:** `python:3.13.18-slim-trixie@sha256:e48f59cd...`
+  (multi-arch index digest), deps from the fully pinned `requirements.txt`
+  with `--no-cache-dir`, a system user/group with uid/gid 10001, `USER
+  10001:10001`, exec-form `CMD` and `HEALTHCHECK`, `.dockerignore` limiting
+  the context to `requirements.txt` and `app/`. `scripts/verify_demo_image.sh`
+  (CI job `demo-image`) builds it and checks the runtime uid, the healthcheck,
+  the API and the image history.
+- **Fixture:** `fixtures/dockerfile/Dockerfile.vulnerable` - `MAINTAINER`,
+  `python:latest`, `ENV API_TOKEN=...` (placeholder), `ADD` from a URL on the
+  reserved `.invalid` TLD, unpinned `apt-get`/`pip` installs, `cd` in `RUN`,
+  `curl | sh` without pipefail, `USER root`, shell-form `CMD`. Never built.
+- **Blind spots / honest notes:**
+  - Lints the Dockerfile *text*. Vulnerable packages inside the base image or
+    installed at build time are out of scope (Batch 5, Trivy).
+  - The policy parser is deliberately small: it joins line continuations and
+    skips comments, but does not interpret heredoc (`RUN <<EOF`) bodies,
+    `# escape=` directives, or variables in `FROM`/`USER` (`FROM $BASE`
+    counts as unpinned; `USER $APP_USER` counts as non-root).
+  - SS004 is name-based: a secret passed under an innocuous name, or written
+    into a file during `RUN`, is not detected (Gitleaks scans the repo, not
+    built images).
+  - A digest pin freezes the base image, including its future CVEs; it has
+    to be bumped deliberately (Dependabot/Renovate is planned, Batch 6).
+  - `pip install` in the image uses version pins but not hashes yet.
 
 ### 5. Container image scan - Trivy (planned)
 
@@ -210,8 +263,9 @@ pip-audit.
 ## Supply-chain hygiene for the pipeline itself
 
 - Third-party actions pinned to full commit SHAs.
-- Downloaded binaries (Gitleaks) pinned by SHA-256 in the repo, not trusted
-  from a checksums file fetched alongside them.
+- Downloaded binaries (Gitleaks, hadolint) pinned by SHA-256 in the repo,
+  not trusted from a checksums file fetched alongside them.
+- The demo image's base is pinned by digest.
 - Tool versions pinned in `scripts/requirements-tools.txt` (later batches may
   add hashes).
 - Least-privilege `permissions:`; `persist-credentials: false` on checkout.

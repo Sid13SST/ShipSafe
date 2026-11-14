@@ -45,12 +45,22 @@ Status: `[x]` done, `[ ]` not started.
 - [x] `scripts/verify_secrets.sh` (9 checks) + offline unit tests (`scripts/tests/test_secrets_scan.py`)
 - Verification: unit tests, self-test, installer tamper test, actionlint+shellcheck, other gates re-run
 
-## Batch 4 - Dockerfile lint (hadolint)  `[ ]`
+## Batch 4 - Dockerfile lint (hadolint)  `[x]`
 
-- [ ] `demo-app/Dockerfile` (slim pinned base, non-root user, no build secrets)
-- [ ] hadolint pinned; threshold `warning`
-- [ ] `fixtures/dockerfile/Dockerfile.vulnerable` (latest tag, root, `ADD` URL, ...)
-- [ ] Reusable `dockerfile-lint.yml`, self-test
+- [x] `demo-app/Dockerfile`: `python:3.13.18-slim-trixie@sha256:...` base, non-root uid 10001,
+      HEALTHCHECK, no ARG/secrets; `.dockerignore` limits context to requirements + app
+- [x] hadolint 2.14.0 pinned by version + per-platform SHA-256 (`scripts/install_hadolint.sh`);
+      `.hadolint.yaml` = `failure-threshold: warning`, nothing ignored (unit-test enforced)
+- [x] ShipSafe policy checks hadolint lacks: SS001 digest pin, SS002 non-root final USER,
+      SS003 no ADD from URL, SS004 no secret-named ARG/ENV
+- [x] Fail closed: no Dockerfiles, missing file, hadolint error/invalid JSON, DL1000 parse
+      failure, no FROM, forbidden path; pragmas + HADOLINT_* env disabled
+- [x] `fixtures/dockerfile/Dockerfile.vulnerable` (MAINTAINER, latest, root, ADD URL, secret ENV, ...)
+- [x] Reusable `dockerfile-lint.yml` with discovery (fixtures/ excluded + forbidden), CI jobs
+- [x] `scripts/verify_dockerfile_lint.sh` (9 checks), unit tests, `scripts/verify_demo_image.sh`
+      + `demo-image` CI job (build, uid 10001, healthy, API)
+- Verification: unit tests, self-test, installer tamper test, image build/run, actionlint+shellcheck,
+  other gates re-run
 
 ## Batch 5 - Container scan (Trivy)  `[ ]`
 
@@ -66,6 +76,9 @@ Status: `[x]` done, `[ ]` not started.
 - [ ] Dependency-audit `scripts/requirements-tools.txt` itself (tool supply chain)
 - [ ] Decide whether SAST should also scan `tests/` directories (Semgrep skips them by default)
 - [ ] Secrets: decide on a reviewed waiver path for real false positives (today: widen `.gitleaks.toml` + its test)
+- [ ] hadolint: move to 2.15.x once its checksums can be verified against an upstream-published source
+- [ ] Demo image: install deps with `pip --require-hashes` (needs a hash-pinned requirements lock)
+- [ ] Dockerfile policy parser: interpret heredoc (`RUN <<EOF`) bodies; today they are not inspected
 - [ ] Cross-repo reuse: workflows check out ShipSafe scripts at a pinned ref (or composite actions); usage example
 - [ ] Optional SARIF upload to GitHub code scanning (free for public repos)
 - [ ] Dependabot/Renovate config for action + tool pin updates

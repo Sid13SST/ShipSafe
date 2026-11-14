@@ -17,7 +17,7 @@ real issues.
 | Dependency vulnerability audit | [pip-audit](https://github.com/pypa/pip-audit) | Implemented |
 | SAST | [Semgrep](https://github.com/semgrep/semgrep) OSS CLI, vendored rules, offline | Implemented |
 | Secrets detection | [Gitleaks](https://github.com/gitleaks/gitleaks) OSS CLI, pinned + checksum-verified binary | Implemented |
-| Dockerfile lint | [hadolint](https://github.com/hadolint/hadolint) | Planned |
+| Dockerfile lint | [hadolint](https://github.com/hadolint/hadolint), pinned + checksum-verified binary, plus 4 ShipSafe policy checks | Implemented |
 | Container image scan | [Trivy](https://github.com/aquasecurity/trivy) | Planned |
 
 All tooling is free and open source.
@@ -43,6 +43,7 @@ fixtures/            DELIBERATELY VULNERABLE samples - never install or run
 rules/semgrep/       vendored, reviewed Semgrep rules + their annotated tests
 rules/gitleaks/      default-rules-only config used by the secrets self-test
 .gitleaks.toml       project secrets config (default rules + fixtures/ allowlist only)
+.hadolint.yaml       hadolint config (fail at warning, nothing ignored)
 scripts/             gate logic + self-test scripts (same code in CI and locally)
 docs/                DESIGN.md (architecture, scope), TASKS.md (build plan)
 ```
@@ -54,11 +55,11 @@ python3 -m venv .venv-tools && .venv-tools/bin/pip install -r scripts/requiremen
 ```
 
 ```bash
-bash scripts/install_gitleaks.sh .tools/bin && export PATH="$PWD/.tools/bin:$PATH"
+bash scripts/install_gitleaks.sh .tools/bin && bash scripts/install_hadolint.sh .tools/bin && export PATH="$PWD/.tools/bin:$PATH"
 ```
 
 ```bash
-. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh && bash scripts/verify_secrets.sh
+. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh && bash scripts/verify_secrets.sh && bash scripts/verify_dockerfile_lint.sh
 ```
 
 The demo app uses its own venv (`.venv`); see [CLAUDE.md](CLAUDE.md).
