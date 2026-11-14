@@ -6,27 +6,41 @@
 #   - no ARG/ENV in the image history has a secret-looking name
 #
 # Usage: scripts/verify_demo_image.sh [build-context]   (default: demo-app)
-# Needs a running Docker daemon and network access to pull the base image
-# and PyPI packages. CI runs it on the committed demo-app/ unmodified.
+#   SHIPSAFE_PREBUILT_IMAGE=<tag>  check an already-built image instead of
+#   building one (e.g. the exact image the container scan just scanned, or one
+#   built with network flags a restricted environment needs).
+# Needs a running Docker daemon; building needs network access to Docker Hub,
+# PyPI and deb.debian.org. CI builds the committed demo-app/ unmodified.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTEXT="${1:-$ROOT/demo-app}"
-TAG="shipsafe-demo:verify-$$"
+TAG="${SHIPSAFE_PREBUILT_IMAGE:-shipsafe-demo:verify-$$}"
 PORT="${SHIPSAFE_VERIFY_PORT:-18080}"
 failures=0
 cid=""
-cleanup() { [ -n "$cid" ] && docker rm -f "$cid" >/dev/null 2>&1; docker rmi -f "$TAG" >/dev/null 2>&1; }
+cleanup() {
+  [ -n "$cid" ] && docker rm -f "$cid" >/dev/null 2>&1
+  [ -z "${SHIPSAFE_PREBUILT_IMAGE:-}" ] && docker rmi -f "$TAG" >/dev/null 2>&1
+  return 0
+}
 trap cleanup EXIT
 
 ok()   { echo "IMAGE CHECK OK   [$1]"; }
 fail() { echo "IMAGE CHECK FAIL [$1]: $2"; failures=$((failures+1)); }
 
-echo "building $TAG from $CONTEXT"
-if ! docker build -q -t "$TAG" "$CONTEXT" >/dev/null; then
-  echo "IMAGE CHECK FAIL [build]: docker build failed"; exit 1
+if [ -n "${SHIPSAFE_PREBUILT_IMAGE:-}" ]; then
+  if ! docker image inspect "$TAG" >/dev/null 2>&1; then
+    echo "IMAGE CHECK FAIL [prebuilt]: image $TAG not found"; exit 1
+  fi
+  ok "using prebuilt image $TAG"
+else
+  echo "building $TAG from $CONTEXT"
+  if ! docker build -q -t "$TAG" "$CONTEXT" >/dev/null; then
+    echo "IMAGE CHECK FAIL [build]: docker build failed"; exit 1
+  fi
+  ok "build"
 fi
-ok "build"
 
 cfg_user="$(docker image inspect -f '{{.Config.User}}' "$TAG")"
 case "${cfg_user%%:*}" in

@@ -166,6 +166,7 @@ Run gate commands with `.venv-tools` activated and demo-app commands with
 | Dockerfile gate (as CI) | `python scripts/dockerfile_lint.py --discover . --exclude fixtures/ --forbid-path fixtures/` |
 | Dockerfile self-test | `bash scripts/verify_dockerfile_lint.sh` |
 | Demo image build + runtime check (needs Docker) | `bash scripts/verify_demo_image.sh demo-app` |
+| Runtime check of an already-built image | `SHIPSAFE_PREBUILT_IMAGE=shipsafe-demo:ci bash scripts/verify_demo_image.sh` |
 | Container scan of a built image (as CI) | `docker build -t shipsafe-demo:ci demo-app && python scripts/container_scan.py image shipsafe-demo:ci` |
 | Container config scan (as CI) | `python scripts/container_scan.py config . --skip-dir fixtures --forbid-path fixtures/` |
 | Container-scan self-test (network) | `bash scripts/verify_container_scan.sh` |
