@@ -49,11 +49,45 @@ def test_installer_pins_version_and_all_checksums() -> None:
     assert len(re.findall(r'(Linux|macOS)-(64bit|ARM64)\)\s+echo "([0-9a-f]{64})"', text)) == 4
 
 
+USES = re.compile(r"^\s*(?:-\s*)?uses:\s*(\S+)", re.M)
+IMAGE = re.compile(r"^\s*(?:-\s*)?image:\s*(\S+)", re.M)
+DOCKER_RUN = re.compile(r"docker\s+(?:run|pull)\b[^\n]*", re.I)
+
+
+def _code_lines(text: str) -> str:
+    """Workflow text without comment lines (comments may *name* what is banned)."""
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+
+
 def test_no_trivy_actions_or_images_in_workflows() -> None:
-    for wf in (REPO / ".github" / "workflows").glob("*.yml"):
-        text = wf.read_text()
-        assert "aquasecurity/trivy-action" not in text and "aquasecurity/setup-trivy" not in text, wf
-        assert not re.search(r"image:\s*\S*trivy", text), wf
+    workflows = sorted((REPO / ".github" / "workflows").glob("*.yml"))
+    assert workflows
+    for wf in workflows:
+        code = _code_lines(wf.read_text())
+        for ref in USES.findall(code):
+            assert not ref.lower().startswith("aquasecurity/"), f"{wf.name}: uses {ref}"
+        for ref in IMAGE.findall(code):
+            assert "trivy" not in ref.lower(), f"{wf.name}: container image {ref}"
+        for cmd in DOCKER_RUN.findall(code):
+            assert "trivy" not in cmd.lower(), f"{wf.name}: {cmd}"
+
+
+@pytest.mark.parametrize("snippet", [
+    "      - uses: aquasecurity/trivy-action@0.35.0",
+    "    uses: aquasecurity/setup-trivy@v0.2.6",
+    "    container:\n      image: aquasec/trivy:0.76.2",
+    "      - run: docker run --rm aquasec/trivy image x",
+])
+def test_ban_detects_real_usage(snippet: str) -> None:
+    code = _code_lines(snippet)
+    hits = [r for r in USES.findall(code) if r.lower().startswith("aquasecurity/")]
+    hits += [r for r in IMAGE.findall(code) if "trivy" in r.lower()]
+    hits += [c for c in DOCKER_RUN.findall(code) if "trivy" in c.lower()]
+    assert hits
+
+
+def test_ban_ignores_comments() -> None:
+    assert _code_lines("# never use aquasecurity/trivy-action\n# uses: aquasecurity/setup-trivy").strip() == ""
 
 
 # --- vulnerability policy -----------------------------------------------------------
