@@ -1,0 +1,4 @@
+# Top-level runtime dependencies of the demo app. requirements.txt is the
+# hash-pinned lock compiled from this file (see CLAUDE.md > Updating pins).
+fastapi==0.162.7
+uvicorn==0.54.0

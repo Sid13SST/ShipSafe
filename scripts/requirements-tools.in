@@ -1,0 +1,5 @@
+# Free/open-source gate tools installed with pip. requirements-tools.txt is the
+# hash-pinned lock compiled from this file. Install into a venv separate from
+# the demo app: semgrep pins an opentelemetry-api older than fastapi allows.
+pip-audit==2.10.1
+semgrep==1.185.0

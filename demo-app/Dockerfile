@@ -3,7 +3,8 @@
 # - Base image pinned by exact version AND multi-arch index digest.
 # - Debian security updates applied at build time (the digest pin freezes the
 #   base image, so fixes published after it would otherwise be missing).
-# - Dependencies come from the fully pinned requirements.txt; pip itself is
+# - Dependencies come from the hash-pinned requirements.txt (--require-hashes:
+#   a package whose bytes differ from the lock is rejected); pip itself is
 #   then removed - the app never needs it at runtime, and its vendored copies
 #   of urllib3/msgpack/setuptools carry their own advisories.
 # - Runs as a dedicated non-root user (uid/gid 10001).
@@ -28,7 +29,7 @@ RUN groupadd --system --gid 10001 app \
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
     && python -m pip uninstall --yes pip
 
 COPY app/ ./app/

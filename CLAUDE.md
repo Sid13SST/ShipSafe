@@ -45,8 +45,10 @@ demo-app/                 # minimal FastAPI app - the "clean" target; gates must
   app/main.py
   Dockerfile              # pinned-digest slim base, security upgrades, pip removed, non-root 10001
   .dockerignore           # context = requirements.txt + app/ only
-  requirements.txt        # runtime deps, fully pinned incl. transitive (lockfile)
-  requirements-dev.txt    # test deps, fully pinned
+  requirements.in         # top-level runtime deps -> compiled to requirements.txt
+  requirements.txt        # hash-pinned lock (pip-compile --generate-hashes), incl. transitive
+  requirements-dev.in     # top-level test deps -> requirements-dev.txt (hash-pinned)
+  requirements-dev.txt
   tests/
 fixtures/                 # DELIBERATELY VULNERABLE samples - gates must FAIL; never install/run
   README.md               # index of what each fixture seeds
@@ -76,7 +78,8 @@ scripts/
   container_scan.py       # Trivy gate: image mode (vulns + image config) and config mode
   install_trivy.sh        # installs pinned Trivy release, SHA-256 verified (see supply-chain note)
   verify_container_scan.sh  # self-test: PASS on project, FAIL on fixtures, guards
-  requirements-tools.txt  # pinned versions of gate tools (own venv - see below)
+  requirements-tools.in   # pip-installed gate tools (pip-audit, semgrep) -> compiled lock
+  requirements-tools.txt  # hash-pinned lock of gate tools (own venv - see below)
   tests/                  # offline unit tests for gate scripts
 docs/
   DESIGN.md               # architecture, gate design, honest scope notes
@@ -95,7 +98,8 @@ docs/
   "DELIBERATELY VULNERABLE" header. App-scanning jobs must not include
   `fixtures/`.
 - **Pin everything.** Actions by full commit SHA (with a `# vX.Y.Z` comment),
-  tool versions in `scripts/requirements-tools.txt`, demo-app deps fully pinned.
+  pip packages by version *and* hash (`--require-hashes`, compiled locks),
+  binaries by version + SHA-256 in their install scripts, base images by digest.
 - **Scan the whole project, exclude explicitly.** Gates that scan source take
   the repo root as target and exclude `fixtures/` (and any other deliberately
   vulnerable file, e.g. `rules/semgrep/python-security.py`) by explicit flag,
@@ -141,8 +145,8 @@ Use two venvs: Semgrep pins an older `opentelemetry-api` than FastAPI
 accepts, so gate tools and the demo app cannot share one environment.
 
 ```bash
-python3 -m venv .venv-tools && .venv-tools/bin/pip install -r scripts/requirements-tools.txt -r demo-app/requirements-dev.txt
-python3 -m venv .venv && .venv/bin/pip install -r demo-app/requirements.txt -r demo-app/requirements-dev.txt
+python3 -m venv .venv-tools && .venv-tools/bin/pip install --require-hashes -r scripts/requirements-tools.txt -r demo-app/requirements-dev.txt
+python3 -m venv .venv && .venv/bin/pip install --require-hashes -r demo-app/requirements.txt -r demo-app/requirements-dev.txt
 bash scripts/install_gitleaks.sh .tools/bin && bash scripts/install_hadolint.sh .tools/bin
 bash scripts/install_trivy.sh .tools/bin
 export PATH="$PWD/.tools/bin:$PATH"
@@ -204,16 +208,23 @@ that.)
 | `container-scan` | pass | demo image has no fixable HIGH/CRITICAL vuln, no image-config misconfig/secret, supported OS; config scan clean - the real gate (time-variant) |
 | `container-scan-self-test` | pass | config scan PASS on project / FAIL on fixture; ERROR on forbidden, inline ignore, empty, bad image; trivy.yaml/.trivyignore/env ignored; old image FAILs |
 
-## Updating demo-app pins
+## Updating pip pins (hash-pinned locks)
 
-Install the top-level deps in a fresh venv and freeze:
+Every pip install (CI, the demo image, local setup) uses `--require-hashes`.
+Each lock is compiled with pip-tools (free OSS) from a `.in` file:
 
-```bash
-python3 -m venv /tmp/lock && /tmp/lock/bin/pip install fastapi==<ver> uvicorn==<ver>
-/tmp/lock/bin/pip freeze   # paste into demo-app/requirements.txt below the header
-```
+| Edit | Then compile |
+|------|--------------|
+| `demo-app/requirements.in` | `cd demo-app && pip-compile --generate-hashes --allow-unsafe --strip-extras --no-emit-index-url -o requirements.txt requirements.in` |
+| `demo-app/requirements-dev.in` | `cd demo-app && pip-compile --generate-hashes --allow-unsafe --strip-extras --no-emit-index-url -o requirements-dev.txt requirements-dev.in` |
+| `scripts/requirements-tools.in` | `cd scripts && pip-compile --generate-hashes --allow-unsafe --strip-extras --no-emit-index-url -o requirements-tools.txt requirements-tools.in` |
 
-Then rerun the demo-app tests and `scripts/verify_dependency_audit.sh`.
+Install pip-tools in a throwaway venv (not the tools or app venv). Locks are
+compiled with CPython 3.13 on Linux (CI's platform). Add `--upgrade-package
+NAME` to bump one package; without it pip-compile keeps existing pins.
+Dependabot (`.github/dependabot.yml`) proposes these bumps too. After any
+change, rerun the unit tests (they check every line is hash-pinned), the
+demo-app tests and `scripts/verify_dependency_audit.sh`.
 
 ## Status
 
