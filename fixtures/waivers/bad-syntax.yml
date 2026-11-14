@@ -1,0 +1,7 @@
+# DELIBERATELY VULNERABLE/INVALID FIXTURE - YAML outside the supported subset.
+# Used only by scripts/verify_waivers.sh: the gate must ERROR (exit 2).
+waivers:
+  - id: SS001
+    gate: dockerfile-lint
+    reason: &anchor "Fixture: YAML anchors are not part of the supported subset"
+    expires: 2020-01-01

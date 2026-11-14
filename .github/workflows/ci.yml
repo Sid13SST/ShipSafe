@@ -191,3 +191,22 @@ jobs:
           echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
       - name: Assert gate passes on project and fails on fixtures/ (old image read remotely, never run)
         run: bash scripts/verify_container_scan.sh
+
+  waivers-self-test:
+    name: self-test - waivers (active passes, expired fails, invalid errors)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned scan tooling
+        run: |
+          python -m pip install --disable-pip-version-check -r scripts/requirements-tools.txt
+          bash scripts/install_hadolint.sh "$RUNNER_TEMP/hadolint-bin"
+          echo "$RUNNER_TEMP/hadolint-bin" >> "$GITHUB_PATH"
+      - name: Assert waiver semantics with the real gate tools
+        run: bash scripts/verify_waivers.sh

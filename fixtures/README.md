@@ -28,6 +28,7 @@ Rules for fixtures:
 | `dockerfile/Dockerfile.vulnerable` | Dockerfile lint (hadolint + policy) | `MAINTAINER`, `python:latest` (no digest), secret-named `ENV`, `ADD` from a URL on the reserved `.invalid` TLD, unpinned apt/pip installs, `cd` in RUN, `curl \| sh` without pipefail, `USER root`, shell-form `CMD`. Never built. |
 | `container-scan/old-base-image.txt` | container scan (Trivy image) | Digest-pinned reference to `python:3.11.4-slim-bookworm` (Debian 12.1, 2023): many fixable HIGH/CRITICAL vulns, runs as root, no HEALTHCHECK. Read from the registry with `--image-src remote`; never pulled into Docker, never run. |
 | `container-scan/Dockerfile.misconfig` | container scan (Trivy config) | `debian:latest`, apt without `--no-install-recommends`, `ADD` from a `.invalid` URL, `USER root`, no HEALTHCHECK. Never built. |
+| `waivers/expired.yml`, `secrets-waiver.yml`, `bad-syntax.yml` | waivers (all waiver-aware gates) | An expired waiver (must FAIL the gate), an attempt to waive a secrets finding and a file using YAML outside the supported subset (both must ERROR). Valid waivers are generated at test time so their dates stay current. |
 | `sast/vulnerable_app.py` | SAST (Semgrep) | FastAPI handlers with command injection (`shell=True`, `os.system`), `yaml.load`, `eval`, f-string SQL, `pickle.loads`. Raises on import. |
 
 `rules/semgrep/python-security.py` (outside this directory) is also
