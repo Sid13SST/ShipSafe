@@ -10,7 +10,9 @@ real issues.
 > project default for the repository owner to review (see
 > [docs/DESIGN.md](docs/DESIGN.md#policy-defaults-for-the-repository-owner-to-review)),
 > not a judgement that anything reported-only is acceptable. A passing pipeline means the configured open-source tools, with
-> their current rules and advisory data, reported nothing at run time. It does
+> their current rules and advisory data, reported nothing above the fail
+> thresholds at run time. Findings below a threshold are still reported but do
+> not fail the build. It does
 > not mean the code or its dependencies are secure.
 
 ## Gates
@@ -100,8 +102,13 @@ scanned. See [fixtures/README.md](fixtures/README.md).
 Short version. Per-gate detail, blind spots and the policy defaults are in
 [docs/DESIGN.md](docs/DESIGN.md).
 
-- A green run means the configured tools, with their current rules and advisory
-  data, reported nothing on that day. It is not a security guarantee.
+- A green run means no gate crossed its configured fail threshold. It does not
+  mean nothing was found. Findings below a threshold are reported but do not
+  fail the build. Example: the demo image scan passes while reporting 47 HIGH
+  vulnerabilities that have no fix yet, because the container gate only fails by
+  default on HIGH/CRITICAL vulnerabilities that have a fixed version. It is not a
+  security guarantee, and it does not mean the code or image is free of known
+  vulnerabilities.
 - Which findings fail the build and which are only reported is a project default
   for the repository owner to review. It has not been accepted as a risk decision.
 - Dependency audit and container scan results change over time as new advisories
@@ -116,3 +123,35 @@ Short version. Per-gate detail, blind spots and the policy defaults are in
   show that the gates catch issues in other code.
 - Reuse from other repositories is pinned to a commit SHA. While ShipSafe is
   private, callers need Actions access to this repository.
+## Walkthrough: what a pass and a fail look like
+
+Real output from CI run #6 (commit b376db4). Fail cases come from the seeded
+fixtures and are expected to fail; the self-test jobs check that they do.
+
+Pass, on the demo app and image (these fail only on the thresholds in
+[docs/DESIGN.md](docs/DESIGN.md#policy-defaults-for-the-repository-owner-to-review)):
+
+```text
+container-scan [image shipsafe-demo:ci]: PASS - OS debian 13.7, 3 target(s); failing: none
+  informational (does not fail): 47 HIGH no fix yet, 65 LOW no fix yet, 89 MEDIUM no fix yet, 5 UNKNOWN no fix yet
+sast [.]: PASS - 8 file(s) scanned, 0 failing finding(s), 0 informational
+```
+
+The first line is a pass that still reports 47 HIGH vulnerabilities with no fix
+available yet. They are listed, not hidden, and a pass does not mean they are
+acceptable.
+
+Fail, on a seeded vulnerable fixture, caught as expected:
+
+```text
+sast [fixtures/sast]: FAIL - 1 file(s) scanned, 8 failing finding(s), 0 informational
+  - fixtures/sast/vulnerable_app.py:45 [ERROR] shipsafe.yaml-unsafe-load
+  - fixtures/sast/vulnerable_app.py:51 [ERROR] shipsafe.eval-exec-non-literal
+SELF-TEST OK   [vulnerable fixture]: exit 1 as expected
+container-scan [config fixtures/container-scan]: FAIL, 1 target(s); failing: 4 misconfig
+  - [misconfig] DS-0002 HIGH Image user should not be 'root' (Dockerfile.misconfig)
+SELF-TEST OK   [config scan, fixture]: exit 1 as expected
+```
+
+These show that each gate catches its own known cases. They say nothing about
+code outside the fixtures.
