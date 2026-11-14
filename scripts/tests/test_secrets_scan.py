@@ -183,7 +183,18 @@ def test_main_exit_codes(tmp_path: Path, target: Path, report, log, tool_exit, e
     assert ss.main([str(target), "--gitleaks", fake]) == expected
 
 
-def test_main_passes_hardening_flags(tmp_path: Path, target: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_default_config_is_scanned_repos_own_or_no_allowlist(tmp_path: Path) -> None:
+    # A consumer repo without its own config gets default rules with NO allowlist -
+    # never ShipSafe's .gitleaks.toml (which allowlists ShipSafe's fixtures/).
+    assert ss.default_config(tmp_path) == ss.FALLBACK_CONFIG
+    assert "allowlist" not in ss.FALLBACK_CONFIG.read_text().replace("# ", "").split("[extend]")[1]
+    (tmp_path / ".gitleaks.toml").write_text('[extend]\nuseDefault = true\n')
+    assert ss.default_config(tmp_path) == tmp_path / ".gitleaks.toml"
+
+
+def test_main_passes_hardening_flags(tmp_path: Path, target: Path, capsys: pytest.CaptureFixture[str],
+                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(REPO)
     fake = fake_gitleaks(tmp_path, [finding()], OK_LOG)
     ss.main([str(target), "--gitleaks", fake])
     argv = json.loads((tmp_path / "argv.json").read_text())
@@ -191,7 +202,8 @@ def test_main_passes_hardening_flags(tmp_path: Path, target: Path, capsys: pytes
     for flag in ["--redact", "--ignore-gitleaks-allow", "--no-banner"]:
         assert flag in argv
     assert argv[argv.index("--exit-code") + 1] == "0"
-    assert argv[argv.index("--config") + 1] == str(REPO / ".gitleaks.toml")
+    # run from the repo root (as CI does), the project's own .gitleaks.toml is picked
+    assert Path(argv[argv.index("--config") + 1]).resolve() == (REPO / ".gitleaks.toml").resolve()
     assert PLACEHOLDER not in capsys.readouterr().out
 
 

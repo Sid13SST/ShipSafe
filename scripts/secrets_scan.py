@@ -44,7 +44,17 @@ EXIT_FAIL = 1
 EXIT_ERROR = 2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = REPO_ROOT / ".gitleaks.toml"
+# Tooling-provided fallback: default rules, NO allowlist. ShipSafe's own
+# .gitleaks.toml (which allowlists ShipSafe's fixtures/) must never be applied
+# to another repository, or it would hide secrets in that repo's fixtures/.
+FALLBACK_CONFIG = REPO_ROOT / "rules" / "gitleaks" / "default-only.toml"
+
+
+def default_config(cwd: Path | None = None) -> Path:
+    """The scanned repo's own .gitleaks.toml if it has one, else default rules
+    with no allowlist. Never the tooling checkout's .gitleaks.toml."""
+    own = (cwd or Path.cwd()) / ".gitleaks.toml"
+    return own if own.is_file() else FALLBACK_CONFIG
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 BYTES_RE = re.compile(r"scanned ~(\d+) bytes")
@@ -223,10 +233,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("target", nargs="?", default=".", type=Path, help="directory (dir mode) or repo (git mode)")
     parser.add_argument("--mode", choices=["dir", "git"], default="dir",
                         help="dir: working tree files; git: every commit in history")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Gitleaks config (default: .gitleaks.toml)")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="Gitleaks config (default: ./.gitleaks.toml of the scanned repo if present, "
+                             "else default rules with no allowlist)")
     parser.add_argument("--report", type=Path, help="also save the (redacted) Gitleaks JSON report here")
     parser.add_argument("--gitleaks", default="gitleaks", help="gitleaks executable")
     args = parser.parse_args(argv)
+    if args.config is None:
+        args.config = default_config()
 
     label = f"{args.mode} {args.target}"
     try:
