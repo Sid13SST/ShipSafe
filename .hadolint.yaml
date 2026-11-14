@@ -1,0 +1,8 @@
+# ShipSafe hadolint config for the Dockerfile gate.
+#
+# Fail on warning and above. No rules are ignored or downgraded, and no
+# registries are trusted-listed: scripts/tests/test_dockerfile_lint.py fails
+# if this file gains an `ignored`/`override` section, so relaxing a rule is a
+# deliberate, reviewed change. The gate also runs hadolint with
+# --disable-ignore-pragma, so inline `# hadolint ignore=` comments don't count.
+failure-threshold: warning

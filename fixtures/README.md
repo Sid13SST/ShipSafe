@@ -17,13 +17,15 @@ Rules for fixtures:
   explicitly for the project scan (SAST also passes `--forbid-path fixtures/`
   so a broken exclude makes the gate error; the secrets gate allowlists
   exactly `^(\./)?fixtures/` in `.gitleaks.toml`, and its self-test proves
-  that nothing outside `fixtures/` is hidden). Later scanners (Trivy,
-  hadolint) follow the same rule.
+  that nothing outside `fixtures/` is hidden; the Dockerfile gate excludes
+  `fixtures/` from discovery and passes `--forbid-path fixtures/`). Trivy
+  will follow the same rule.
 
 | Path | Gate | Seeded issue |
 |------|------|--------------|
 | `dependency-audit/vulnerable-requirements.txt` | dependency audit (pip-audit) | Old pins with published advisories |
 | `secrets/fake-credentials.env`, `fake_settings.py`, `fake_private_key.pem` | secrets (Gitleaks) | Made-up, never-issued AWS key ID, GitHub-style token (invalid checksum), generic API key, and a PEM-shaped block with a plain-text body. They match Gitleaks default rules and authenticate against nothing. |
+| `dockerfile/Dockerfile.vulnerable` | Dockerfile lint (hadolint + policy) | `MAINTAINER`, `python:latest` (no digest), secret-named `ENV`, `ADD` from a URL on the reserved `.invalid` TLD, unpinned apt/pip installs, `cd` in RUN, `curl \| sh` without pipefail, `USER root`, shell-form `CMD`. Never built. |
 | `sast/vulnerable_app.py` | SAST (Semgrep) | FastAPI handlers with command injection (`shell=True`, `os.system`), `yaml.load`, `eval`, f-string SQL, `pickle.loads`. Raises on import. |
 
 `rules/semgrep/python-security.py` (outside this directory) is also
