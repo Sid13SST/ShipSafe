@@ -77,23 +77,45 @@ Status: `[x]` done, `[ ]` not started.
 - [x] Time-variance documented (DESIGN, README, CLAUDE.md, workflow, script)
 - Verification: unit tests, self-test, installer tamper test, real image scan, other gates re-run
 
-## Batch 6 - Hardening and reuse  `[ ]`
+## Batch 6 - Hardening and reuse  `[x]`
 
-- [ ] Waiver mechanism (`.shipsafe/waivers.yml`: id, reason, expiry; expired waivers fail)
-- [ ] Hash-pin tool installs (`--require-hashes`)
+- [x] Waivers: `.shipsafe/waivers.yml` (id, gate, reason, expires <= 90 days, optional scope),
+      shared `scripts/waivers.py`; expired waiver FAILS, invalid file ERRORs; secrets and scan
+      errors not waivable; applied in dependency-audit, SAST, Dockerfile and container gates
+- [x] `scripts/verify_waivers.sh` + `fixtures/waivers/` + CI `waivers-self-test`; unit tests
+- [x] Closed two SAST bypasses found on the way: `# nosemgrep` (now `--disable-nosem`) and
+      `.semgrepignore` (now ERROR)
+- [x] Hash-pinned pip installs everywhere (`--require-hashes`, pip-compile locks from `.in` files)
+- [x] Cross-repo reuse: tooling checkout at a pinned SHA in all five reusable workflows, moved out
+      of the workspace; secrets config defaults to the caller's own (never ShipSafe's allowlist);
+      `docs/REUSE.md`, `docs/examples/consumer-security-gates.yml`, `scripts/verify_reuse.sh` +
+      CI `reuse-self-test`
+- [x] Dependabot for actions, pip locks and the base-image digest (7-day cooldown);
+      `scripts/check_binary_pins.sh` + weekly `pin-freshness` report for binary pins
+- [x] Severity thresholds documented as reviewable project defaults ("Policy defaults")
+- [ ] ~~SARIF upload~~ - not used (private repo; paid feature there); documented as an option for
+      public repos in DESIGN.md / REUSE.md
+
+### Original Batch 6 list (for reference)
+
+
+- [x] Waiver mechanism (`.shipsafe/waivers.yml`: id, reason, expiry; expired waivers fail)
+- [x] Hash-pin tool installs (`--require-hashes`)
 - [ ] Dependency-audit `scripts/requirements-tools.txt` itself (tool supply chain)
 - [ ] Decide whether SAST should also scan `tests/` directories (Semgrep skips them by default)
 - [ ] Secrets: decide on a reviewed waiver path for real false positives (today: widen `.gitleaks.toml` + its test)
 - [ ] hadolint: move to 2.15.x once its checksums can be verified against an upstream-published source
-- [ ] Demo image: install deps with `pip --require-hashes` (needs a hash-pinned requirements lock)
+- [x] Demo image: install deps with `pip --require-hashes` (Batch 6)
 - [ ] Dockerfile policy parser: interpret heredoc (`RUN <<EOF`) bodies; today they are not inspected
 - [ ] Trivy: verify the release's Sigstore bundle (cosign) when bumping the pin - not done for 0.76.2
 - [ ] Container scan: cache the Trivy DB between CI runs; consider a scheduled (nightly) run so
       time-variant failures surface without a commit
-- [ ] Container scan: waiver path for unfixable-but-accepted findings (with expiry)
-- [ ] Cross-repo reuse: workflows check out ShipSafe scripts at a pinned ref (or composite actions); usage example
-- [ ] Optional SARIF upload to GitHub code scanning (free for public repos)
-- [ ] Dependabot/Renovate config for action + tool pin updates
+- [ ] Decide whether the default severity thresholds fit this project (owner review; see
+      DESIGN.md "Policy defaults")
+- [ ] Waivers: consider requiring a named approver field once more than one person maintains this
+- [x] Cross-repo reuse: workflows check out ShipSafe scripts at a pinned ref; usage example
+- [ ] Optional SARIF upload to GitHub code scanning (free for public repos) - documented only
+- [x] Dependabot config for action + tool pin updates (+ binary pin freshness report)
 
 ## Batch 7 - Docs polish  `[ ]`
 

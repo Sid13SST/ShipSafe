@@ -62,6 +62,64 @@ demo-app   gate unit     gate on demo-app        gate self-test
 Failing closed matters: a gate that silently errors and exits 0 gives false
 confidence, which is worse than no gate.
 
+### Policy defaults (for the repository owner to review)
+
+Each gate's FAIL threshold below is **ShipSafe's chosen default**, picked so
+that a red build points at something a developer can act on in that change.
+It is not a security guarantee, and it is **not a statement that anything
+below the threshold is acceptable risk** - that judgement belongs to whoever
+owns the system, and the repository owner reviews these defaults like any
+other change. Findings below a threshold are still reported in every run
+precisely so that someone can make that call.
+
+| Gate | FAILs on (default) | Reported only (default) |
+|------|--------------------|-------------------------|
+| Dependency audit | any published advisory matching a pin | - |
+| SAST | ERROR/WARNING (and CRITICAL/HIGH/MEDIUM/unknown) rule severity | INFO/LOW |
+| Secrets | any finding | - |
+| Dockerfile lint | hadolint warning/error; ShipSafe SS001-SS004 | hadolint info/style |
+| Container scan | HIGH/CRITICAL vulns **with a fixed version**; any misconfiguration; image secrets; EOL OS | vulns with no fix yet (any severity); LOW/MEDIUM/UNKNOWN |
+
+Changing a threshold is a code change in the gate script (and its tests),
+not a configuration switch, so it is always visible in review. Individual,
+time-boxed exceptions go through waivers (next section), never through
+lowering a threshold.
+
+### Waivers
+
+`.shipsafe/waivers.yml` in the scanned repository holds time-boxed
+exceptions for individual findings. Shared logic: `scripts/waivers.py`.
+
+```yaml
+waivers:
+  - id: CVE-2026-12345        # CVE/GHSA/PYSEC, Semgrep rule id, DLxxxx/SSxxx, DS-xxxx
+    gate: container-scan      # dependency-audit | sast | dockerfile-lint | container-scan
+    reason: "No Debian fix yet; image not internet-facing; issue 12"
+    expires: 2026-12-31       # YYYY-MM-DD, inclusive, at most 90 days ahead
+    scope: zlib1g             # optional: package name, or path/glob for SAST/Dockerfile
+```
+
+- **Expired waiver -> FAIL** (exit 1), even if its finding no longer occurs,
+  so stale exceptions are removed or consciously renewed.
+- **Invalid file -> ERROR** (exit 2): unknown or missing keys, a reason under
+  20 characters, a bad date, an expiry more than 90 days ahead, duplicates,
+  or any YAML outside a deliberately tiny subset (flat key/value items,
+  comments, plain or quoted strings - no anchors, flow collections, block
+  scalars or nesting). A broken entry for any gate breaks every gate.
+- **Not waivable:** secrets findings (rotate the secret; the reviewed
+  `.gitleaks.toml` allowlist is the only suppression), image secrets and
+  end-of-support OS findings in the container scan, and scan ERRORs of any
+  kind - a waiver applies to a finding, never to an incomplete scan.
+- Waived findings are still printed (`WAIVED: ... until <date> (<reason>)`),
+  and waivers that matched nothing are reported as unused.
+- Waivers are the **only** per-finding suppression. Inline tool comments
+  (`# nosemgrep`, `# hadolint ignore=`, `gitleaks:allow`, `trivy:ignore`)
+  and tool ignore files (`.semgrepignore`, `.gitleaksignore`, `.trivyignore`)
+  are ignored or make the gate ERROR, because they bypass review.
+- A waiver records a reviewed, temporary exception; it does not make the
+  finding safe. `scripts/verify_waivers.sh` (CI `waivers-self-test`) checks
+  these rules with the real tools.
+
 ## Gates
 
 ### 1. Dependency audit - pip-audit (implemented, Batch 1)
@@ -87,8 +145,8 @@ confidence, which is worse than no gate.
     (Trivy covers the image in a later batch).
   - Does not judge reachability: a flagged advisory may not be exploitable in
     this app.
-  - No allowlist/waiver mechanism yet (planned; waivers must carry an expiry
-    and reason).
+  - Individual advisories can be waived for at most 90 days (see Waivers);
+    there is no permanent ignore list.
 
 ### 2. SAST - Semgrep (implemented, Batch 2)
 
@@ -142,8 +200,10 @@ confidence, which is worse than no gate.
   - The `ast` check uses the runner's Python (3.13); code using newer syntax
     would be reported as ERROR.
   - False positives are possible (e.g. `shell=True` with a constant command
-    still raises a WARNING). There is no inline-suppression policy yet;
-    `# nosemgrep` works but should be reviewed like a waiver (Batch 6).
+    still raises a WARNING). They are handled with a time-boxed waiver.
+    Inline `# nosemgrep` comments are ignored (`--disable-nosem`) and a
+    `.semgrepignore` makes the gate ERROR - both silently bypassed the gate
+    before Batch 6 (found and closed while building waivers).
 
 ### 3. Secrets detection - Gitleaks (implemented, Batch 3)
 
@@ -191,8 +251,11 @@ confidence, which is worse than no gate.
     pushed and must be rotated; removing it from the tree does not un-leak it.
   - The volume check parses Gitleaks' log text; a future log-format change
     would make the gate ERROR (fail closed), not pass.
-  - No waiver path for genuine false positives yet other than a reviewed
-    change to `.gitleaks.toml` and its unit test.
+  - Secrets findings cannot be waived by design. A genuine false positive
+    needs a reviewed change to the scanned repo's `.gitleaks.toml` (in this
+    repo, its unit test pins the allowlist to `fixtures/`).
+  - Reused from another repository, the gate uses that repository's own
+    `.gitleaks.toml`, or default rules with no allowlist - never ShipSafe's.
 
 ### 4. Dockerfile lint - hadolint + ShipSafe policy (implemented, Batch 4)
 
@@ -278,9 +341,11 @@ confidence, which is worse than no gate.
 - **Fails on:** HIGH/CRITICAL vulnerabilities that have a `FixedVersion`; any
   misconfiguration with status FAIL (any severity); any secret in the image
   config; an OS past end of support (EOSL).
-- **Reported, does not fail:** vulnerabilities with no fix yet (at any
-  severity) and LOW/MEDIUM/UNKNOWN ones. Rationale: an unfixable finding gives
-  the developer nothing to do in this commit; a fixable one does.
+- **Reported, does not fail (default):** vulnerabilities with no fix yet (at
+  any severity) and LOW/MEDIUM/UNKNOWN ones. This is ShipSafe's chosen
+  default (a red build should point at something fixable in that change); it
+  is for the repository owner to review and is not a judgement that those
+  findings are acceptable. See "Policy defaults".
 - **Errors on (fails closed):** Trivy non-zero exit (it runs with
   `--exit-code 0`), missing/invalid report, report for a different artifact,
   image OS not detected (OS packages not assessed), vulnerability DB older
@@ -323,8 +388,10 @@ confidence, which is worse than no gate.
   - Only packages Trivy can identify (distro package DBs, language
     lockfiles/metadata). Binaries copied in by hand, statically linked code,
     or vendored source without metadata are invisible.
-  - "No fix available" findings are real exposure; the gate's policy accepts
-    them, it does not make them go away.
+  - "No fix available" findings are real exposure. The default policy reports
+    them rather than failing on them; that is a default for the owner to
+    review, not a decision that they are acceptable - and it does not make
+    them go away.
   - Misconfiguration checks are generic best practices; they say nothing
     about the app's own runtime configuration.
   - The DB and checks bundle are fetched at scan time from mirror.gcr.io; the
@@ -332,19 +399,51 @@ confidence, which is worse than no gate.
 
 ## Supply-chain hygiene for the pipeline itself
 
-- Third-party actions pinned to full commit SHAs.
-- Downloaded binaries (Gitleaks, hadolint) pinned by SHA-256 in the repo,
-  not trusted from a checksums file fetched alongside them.
+- Third-party actions pinned to full commit SHAs (unit-tested for every
+  workflow, including the consumer example).
+- Downloaded binaries (Gitleaks, hadolint, Trivy) pinned by version and
+  per-platform SHA-256 in their install scripts, not trusted from a checksums
+  file fetched alongside them.
+- **Every pip install is hash-pinned** (`--require-hashes`): CI, local setup
+  and the demo image install from `pip-compile --generate-hashes` locks
+  compiled from `.in` files. A package whose bytes differ from the lock is
+  rejected (tested by tampering with a hash). The locks were compiled for
+  CPython 3.13 on Linux.
 - The demo image's base is pinned by digest.
-- Tool versions pinned in `scripts/requirements-tools.txt` (later batches may
-  add hashes).
-- Least-privilege `permissions:`; `persist-credentials: false` on checkout.
-- These reduce risk; they do not eliminate it (e.g. pinned tools can still have
-  bugs, PyPI packages are not hash-pinned yet).
+- **Updates:** Dependabot (`.github/dependabot.yml`) proposes weekly PRs for
+  action SHAs, the pip locks and the base-image digest, each with a 7-day
+  cooldown after release (fresh releases are the riskiest - see the Trivy
+  incident). The binary pins cannot be updated by Dependabot;
+  `scripts/check_binary_pins.sh` (weekly `pin-freshness` workflow) reports
+  newer upstream releases, and bumping them stays a manual, reviewed change.
+- Least-privilege `permissions:`; `persist-credentials: false` on every
+  checkout (unit-tested).
+- These reduce risk; they do not eliminate it. Hashes prove the bytes are the
+  ones that were locked, not that they are benign; the Trivy and GitHub
+  Actions downloads still trust their publishers at pinning time.
+- **Code-scanning (SARIF) upload is not used.** It is free for public
+  repositories but needs GitHub Advanced Security for private ones. A public
+  fork could add SARIF output plus a SHA-pinned
+  `github/codeql-action/upload-sarif` step (with `security-events: write` on
+  that job only); the pass/fail verdict would still come from the gate
+  scripts.
 
 ## Reuse
 
-Batch 1's reusable workflow is designed for use *within this repository*
-(`uses: ./.github/workflows/dependency-audit.yml`) because it runs scripts from
-the checked-out repo. Cross-repository reuse (checking out ShipSafe's scripts
-at a pinned ref, or packaging as a composite action) is a later batch.
+All five gate workflows can be called from other repositories - see
+[REUSE.md](REUSE.md) and [examples/consumer-security-gates.yml](examples/consumer-security-gates.yml).
+
+- Each workflow checks out ShipSafe separately at `tooling-ref` and moves it to
+  `$RUNNER_TEMP` before scanning, so the caller's workspace contains only the
+  caller's code. Scripts, install scripts, pins and Semgrep rules come from
+  the tooling commit; code, lock files, Dockerfiles, `.gitleaks.toml` and
+  `.shipsafe/waivers.yml` come from the caller.
+- A caller from another repository must pass a full 40-character commit SHA;
+  branches, tags and short SHAs fail the first step (the validation script
+  itself is unit-tested).
+- Limitation: GitHub does not tell a called workflow which `@ref` its caller
+  used, so ShipSafe cannot verify that `tooling-ref` equals the `uses:` SHA.
+- Limitation: while ShipSafe is private, callers need the Actions access
+  setting and a read-only `tooling-token`.
+- `scripts/verify_reuse.sh` (CI `reuse-self-test`) runs every gate from a
+  separate tooling copy against a throwaway consumer repository.

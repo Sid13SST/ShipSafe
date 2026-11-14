@@ -6,7 +6,10 @@ a minimal demo app and seeded vulnerable fixtures that prove the gates catch
 real issues.
 
 > **Scope, honestly:** these are automated checks in CI, not a security
-> guarantee. A passing pipeline means the configured open-source tools, with
+> guarantee. Which findings fail a build and which are only reported is a
+> project default for the repository owner to review (see
+> [docs/DESIGN.md](docs/DESIGN.md#policy-defaults-for-the-repository-owner-to-review)),
+> not a judgement that anything reported-only is acceptable. A passing pipeline means the configured open-source tools, with
 > their current rules and advisory data, reported nothing at run time. It does
 > not mean the code or its dependencies are secure.
 
@@ -34,6 +37,18 @@ Each gate runs twice in CI:
 Gates fail closed: if a tool cannot complete the audit, the gate reports
 `ERROR` and fails rather than passing.
 
+**Exceptions** for individual findings go in `.shipsafe/waivers.yml`: each
+needs a reason and an expiry at most 90 days out, an expired waiver fails
+the build, and secrets can never be waived. Inline suppression comments and
+tool ignore files are not honoured.
+
+**Pinned supply chain:** actions by commit SHA, pip packages by hash
+(`--require-hashes`), downloaded binaries by SHA-256, the base image by
+digest. Dependabot proposes updates after a 7-day cooldown.
+
+**Reuse:** the gate workflows can be called from other repositories at a
+pinned ShipSafe commit - see [docs/REUSE.md](docs/REUSE.md).
+
 ## Repository layout
 
 ```
@@ -43,15 +58,16 @@ fixtures/            DELIBERATELY VULNERABLE samples - never install or run
 rules/semgrep/       vendored, reviewed Semgrep rules + their annotated tests
 rules/gitleaks/      default-rules-only config used by the secrets self-test
 .gitleaks.toml       project secrets config (default rules + fixtures/ allowlist only)
+.shipsafe/           waivers.yml - time-boxed, reviewed exceptions (empty)
 .hadolint.yaml       hadolint config (fail at warning, nothing ignored)
 scripts/             gate logic + self-test scripts (same code in CI and locally)
-docs/                DESIGN.md (architecture, scope), TASKS.md (build plan)
+docs/                DESIGN.md (architecture, policy, scope), REUSE.md, examples/, TASKS.md
 ```
 
 ## Quick start (local)
 
 ```bash
-python3 -m venv .venv-tools && .venv-tools/bin/pip install -r scripts/requirements-tools.txt -r demo-app/requirements-dev.txt
+python3 -m venv .venv-tools && .venv-tools/bin/pip install --require-hashes -r scripts/requirements-tools.txt -r demo-app/requirements-dev.txt
 ```
 
 ```bash
@@ -59,7 +75,7 @@ bash scripts/install_gitleaks.sh .tools/bin && bash scripts/install_hadolint.sh 
 ```
 
 ```bash
-. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh && bash scripts/verify_secrets.sh && bash scripts/verify_dockerfile_lint.sh && bash scripts/verify_container_scan.sh
+. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh && bash scripts/verify_secrets.sh && bash scripts/verify_dockerfile_lint.sh && bash scripts/verify_container_scan.sh && bash scripts/verify_waivers.sh && bash scripts/verify_reuse.sh
 ```
 
 > **Results change over time.** The dependency audit and container scan

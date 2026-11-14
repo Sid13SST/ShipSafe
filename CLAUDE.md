@@ -32,13 +32,17 @@ workflow names, and commit messages.
 ## Layout
 
 ```
+.github/
+  dependabot.yml          # weekly bumps: action SHAs, pip locks, base-image digest (7-day cooldown)
 .github/workflows/
   ci.yml                  # entry pipeline: tests, gates on the project, gate self-tests
+  pin-freshness.yml       # weekly report: binary pins vs upstream releases (report only)
   dependency-audit.yml    # reusable gate (workflow_call): pip-audit
   sast.yml                # reusable gate (workflow_call): Semgrep OSS, vendored rules
   secrets.yml             # reusable gate (workflow_call): Gitleaks, pinned binary
   dockerfile-lint.yml     # reusable gate (workflow_call): hadolint, pinned binary, + policy checks
   container-scan.yml      # reusable gate (workflow_call): builds image, Trivy image + config scans
+.shipsafe/waivers.yml     # time-boxed exceptions (empty); expired = FAIL, invalid = ERROR
 .gitleaks.toml            # project secrets config: default rules + fixtures/ path allowlist ONLY
 .hadolint.yaml            # hadolint config: failure-threshold warning, nothing ignored
 demo-app/                 # minimal FastAPI app - the "clean" target; gates must PASS
@@ -58,6 +62,7 @@ fixtures/                 # DELIBERATELY VULNERABLE samples - gates must FAIL; n
   dockerfile/Dockerfile.vulnerable  # latest tag, root, ADD from .invalid URL, ...; never built
   container-scan/         # old-base-image.txt (digest ref, scanned remotely, never run)
                           # + Dockerfile.misconfig (trivy config only)
+  waivers/                # expired / secrets-waiver / bad-syntax waiver files (FAIL / ERROR)
 rules/semgrep/
   python-security.yml     # vendored, reviewed Semgrep rules (offline, no registry)
   python-security.py      # annotated rule tests for `semgrep --test` (also deliberately vulnerable)
@@ -78,11 +83,17 @@ scripts/
   container_scan.py       # Trivy gate: image mode (vulns + image config) and config mode
   install_trivy.sh        # installs pinned Trivy release, SHA-256 verified (see supply-chain note)
   verify_container_scan.sh  # self-test: PASS on project, FAIL on fixtures, guards
+  waivers.py              # shared waiver loader/matcher (strict YAML subset, stdlib only)
+  verify_waivers.sh       # self-test: active waiver passes, expired fails, invalid errors
+  verify_reuse.sh         # self-test: gates run from a separate tooling copy against a consumer repo
+  check_binary_pins.sh    # report newer releases for the binary pins Dependabot can't update
   requirements-tools.in   # pip-installed gate tools (pip-audit, semgrep) -> compiled lock
   requirements-tools.txt  # hash-pinned lock of gate tools (own venv - see below)
   tests/                  # offline unit tests for gate scripts
 docs/
-  DESIGN.md               # architecture, gate design, honest scope notes
+  DESIGN.md               # architecture, gate design, policy defaults, waivers, honest scope notes
+  REUSE.md                # calling the gates from another repository
+  examples/consumer-security-gates.yml  # copy-paste consumer workflow (not active here)
   TASKS.md                # ordered batch plan and status
 ```
 
@@ -130,11 +141,30 @@ docs/
   image - their tags/images were hijacked in March 2026 (CVE-2026-33634); a
   unit test fails if a workflow references them. The container gate fails on
   HIGH/CRITICAL vulns *with a fixed version*, any misconfiguration, any
-  image-config secret, or an EOL OS; unfixed vulns are reported only. Trivy
+  image-config secret, or an EOL OS; unfixed vulns are reported only (the
+  project's default policy - see the severity-threshold rule). Trivy
   runs with `--config ""`, `--ignorefile ""` and no `TRIVY_*` env; inline
   `trivy:ignore` comments make the gate ERROR. Results vary day to day with
   the Trivy DB - a red container gate on an unchanged commit usually means a
   new fix was published: rebuild/bump the base, don't suppress.
+- **Severity thresholds are project defaults, not guarantees.** What fails vs.
+  what is only reported (see DESIGN.md "Policy defaults") is ShipSafe's chosen
+  default for the repo owner to review. Never describe below-threshold
+  findings as accepted or safe; they are reported so someone can decide.
+- **Waivers are the only per-finding suppression.** `.shipsafe/waivers.yml`
+  (id, gate, reason >= 20 chars, expires <= 90 days, optional scope). Expired
+  waiver = FAIL, invalid file = ERROR, secrets and scan errors are never
+  waivable. Inline tool suppressions (`# nosemgrep`, `# hadolint ignore=`,
+  `gitleaks:allow`, `trivy:ignore`) and tool ignore files (`.semgrepignore`,
+  `.gitleaksignore`, `.trivyignore`) are ignored or make the gate ERROR. Any
+  new gate must follow the same rule.
+- **Reusable workflows run ShipSafe from a pinned tooling checkout.** Every
+  `scripts/` reference in a reusable workflow goes through `$SHIPSAFE` (the
+  tooling checkout moved to `$RUNNER_TEMP`), never the caller's workspace.
+  The three tooling steps must stay identical across workflows (unit test).
+  Anything the caller owns (code, locks, `.gitleaks.toml`, waivers) is read
+  from the caller's working directory; never apply ShipSafe's own
+  `.gitleaks.toml` or fixtures to another repository.
 - Workflows use `permissions: contents: read` and
   `persist-credentials: false` unless a gate needs more (document why).
 - Python 3.13, stdlib-only for gate scripts where practical.
@@ -174,6 +204,10 @@ Run gate commands with `.venv-tools` activated and demo-app commands with
 | Container scan of a built image (as CI) | `docker build -t shipsafe-demo:ci demo-app && python scripts/container_scan.py image shipsafe-demo:ci` |
 | Container config scan (as CI) | `python scripts/container_scan.py config . --skip-dir fixtures --forbid-path fixtures/` |
 | Container-scan self-test (network) | `bash scripts/verify_container_scan.sh` |
+| Waivers self-test (offline; hadolint + semgrep) | `bash scripts/verify_waivers.sh` |
+| Reuse self-test (all tools; network for pip-audit/Trivy) | `bash scripts/verify_reuse.sh` |
+| Binary pin freshness (network) | `bash scripts/check_binary_pins.sh` (`--strict` to fail if behind) |
+| Validate a waivers file | run any waiver-aware gate; invalid files ERROR with the reason |
 | Run the demo app | `cd demo-app && uvicorn app.main:app --reload` |
 | Lint workflows (optional) | `pip install actionlint-py shellcheck-py && actionlint` |
 
@@ -207,6 +241,12 @@ that.)
 | `demo-image` | pass | committed demo-app/Dockerfile builds; container runs as uid 10001, becomes healthy, serves the API |
 | `container-scan` | pass | demo image has no fixable HIGH/CRITICAL vuln, no image-config misconfig/secret, supported OS; config scan clean - the real gate (time-variant) |
 | `container-scan-self-test` | pass | config scan PASS on project / FAIL on fixture; ERROR on forbidden, inline ignore, empty, bad image; trivy.yaml/.trivyignore/env ignored; old image FAILs |
+| `waivers-self-test` | pass | with real hadolint/Semgrep: active waiver PASSes, scoped-elsewhere FAILs, expired FAILs, secrets/bad YAML/>90 days ERROR |
+| `reuse-self-test` | pass | every gate run from a separate tooling copy against a throwaway consumer repo; consumer fixtures/ not allowlisted; consumer waivers read |
+
+Separate workflow `pin-freshness.yml` (weekly + manual) only reports whether
+the Gitleaks/hadolint/Trivy pins are behind upstream; it never fails on that.
+Cross-repo use of the gate workflows: see `docs/REUSE.md`.
 
 ## Updating pip pins (hash-pinned locks)
 
@@ -229,6 +269,7 @@ demo-app tests and `scripts/verify_dependency_audit.sh`.
 ## Status
 
 Batch 0 (docs), Batch 1 (layout + dependency-audit gate), Batch 2
-(SAST gate), Batch 3 (secrets gate), Batch 4 (Dockerfile gate) and Batch 5
-(container scan) are done. See
+(SAST gate), Batch 3 (secrets gate), Batch 4 (Dockerfile gate), Batch 5
+(container scan) and Batch 6 (waivers, hash pins, cross-repo reuse,
+Dependabot) are done. See
 `docs/TASKS.md` for what comes next.

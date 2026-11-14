@@ -9,7 +9,9 @@ Two modes, same exit-code contract:
   config DIR  `trivy config`: misconfiguration checks on Dockerfiles and other
               IaC files under DIR.
 
-Gate policy:
+Gate policy (ShipSafe's chosen DEFAULT, for the repository owner to review -
+not a guarantee, and "reported" does not mean "accepted"; see DESIGN.md
+"Policy defaults"):
   FAIL on  - a HIGH or CRITICAL vulnerability that has a fixed version
            - any misconfiguration with status FAIL (any severity)
            - any secret found in the image config

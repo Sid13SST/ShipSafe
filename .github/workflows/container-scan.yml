@@ -1,6 +1,8 @@
 # Reusable container-scan gate (Trivy, pinned binary).
 #
 # Builds the image from `context`, then runs scripts/container_scan.py twice:
+# Default policy (ShipSafe's chosen default for the repo owner to review; not
+# a guarantee, and reported-only findings are not "accepted"):
 #   image mode  - fails on HIGH/CRITICAL vulnerabilities that have a fixed
 #                 version, any image-config misconfiguration, any secret in the
 #                 image config, or an end-of-support OS;
