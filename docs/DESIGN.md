@@ -252,13 +252,83 @@ confidence, which is worse than no gate.
     to be bumped deliberately (Dependabot/Renovate is planned, Batch 6).
   - `pip install` in the image uses version pins but not hashes yet.
 
-### 5. Container image scan - Trivy (planned)
+### 5. Container image scan - Trivy (implemented, Batch 5)
 
-Build the demo image in CI, scan with Trivy for OS and language package
-vulnerabilities (fail on HIGH/CRITICAL with fixes available) and
-misconfiguration. Fixture: an old pinned base image reference scanned as
-config/image. Blind spots: advisory-data dependent, same time-variance as
-pip-audit.
+- **Tool:** Trivy 0.76.2 (Apache-2.0) release binary, installed by
+  `scripts/install_trivy.sh` with version and per-platform tarball SHA-256
+  pinned in the repo.
+- **Supply-chain caveat:** Trivy's own distribution was compromised in March
+  2026 (CVE-2026-33634 / GHSA-69fq-xp46-6x23): a malicious v0.69.4 release
+  binary, malicious v0.69.5/v0.69.6 images, and force-pushed tags on
+  `trivy-action` and `setup-trivy`. ShipSafe therefore never uses those
+  actions or any Trivy image, pins a release published long after the
+  incident, and pins the hash in-repo. The pinned linux-64bit binary is
+  byte-identical to the binary in both the Docker Hub and GHCR 0.76.2 images
+  (three independent channels agree). The release's Sigstore signature was
+  **not** verified when pinning (no cosign available in the pinning
+  environment) - that is a tracked follow-up.
+- **Two scans in the gate** (`scripts/container_scan.py`, workflow
+  `container-scan.yml`, which builds `demo-app/` first):
+  - **image** - `trivy image --scanners vuln --image-config-scanners
+    misconfig,secret`: OS packages, language packages, and the image config
+    (USER, ENV, HEALTHCHECK, history).
+  - **config** - `trivy config` on the repo with `fixtures/` skipped and
+    forbidden: Dockerfile (and any future IaC) misconfiguration checks.
+    Overlaps hadolint deliberately; the rule sets differ.
+- **Fails on:** HIGH/CRITICAL vulnerabilities that have a `FixedVersion`; any
+  misconfiguration with status FAIL (any severity); any secret in the image
+  config; an OS past end of support (EOSL).
+- **Reported, does not fail:** vulnerabilities with no fix yet (at any
+  severity) and LOW/MEDIUM/UNKNOWN ones. Rationale: an unfixable finding gives
+  the developer nothing to do in this commit; a fixable one does.
+- **Errors on (fails closed):** Trivy non-zero exit (it runs with
+  `--exit-code 0`), missing/invalid report, report for a different artifact,
+  image OS not detected (OS packages not assessed), vulnerability DB older
+  than 72 h, config scan that found no files, a forbidden path scanned, or a
+  scanned file containing an inline `trivy:ignore` comment.
+- **Suppression bypasses closed (all verified while building this):**
+  - a `.trivyignore` in the working directory suppresses findings - the gate
+    passes `--ignorefile ""`;
+  - a `trivy.yaml` in the working directory can change the severity filter
+    (one test dropped every finding) - the gate passes `--config ""`;
+  - `TRIVY_*` env vars (e.g. `TRIVY_SEVERITY`) do the same - they are
+    stripped;
+  - inline `# trivy:ignore:<ID>` comments in Dockerfiles suppress findings and
+    Trivy has no switch to disable them - the gate ERRORs on any scanned file
+    containing one.
+- **Demo image changes this batch required** (the first scan failed, which
+  is the gate working): the pinned base lacked Debian's `zlib1g` security
+  fix, and pip's vendored `urllib3`/`msgpack`/`setuptools` had fixable HIGH
+  advisories. The Dockerfile now runs `apt-get update --error-on=any &&
+  apt-get upgrade` (an unreachable mirror fails the build; plain `apt-get
+  update` exits 0 and silently skips the updates) and uninstalls pip after
+  installing the app's dependencies.
+- **Fixtures:** `fixtures/container-scan/old-base-image.txt` - a
+  digest-pinned `python:3.11.4-slim-bookworm` (Debian 12.1, 2023) scanned with
+  `--image-src remote`, so Trivy reads layers from the registry and no
+  container is ever created; `Dockerfile.misconfig` for the config scan.
+- **Time-variance (important):**
+  - The verdict depends on the Trivy DB on the day of the run. A new advisory,
+    or a new *fix* for an existing one, can turn an unchanged commit red. That
+    is intended - it is when you need to know - but it means CI is not
+    reproducible day to day, and a green run says nothing about tomorrow.
+  - The usual remedy for a time-variant red is to rebuild (picking up distro
+    updates) or bump the base image digest, not to suppress.
+  - The self-test never asserts exact counts for the old image, only that
+    fixable HIGH/CRITICAL findings exist.
+  - Stale data is refused (DB > 72 h = ERROR) rather than trusted.
+  - As of the Batch 5 run the demo image showed 0 fixable HIGH/CRITICAL and
+    47 HIGH with no fix yet (reported, not failing).
+- **Blind spots / honest notes:**
+  - Only packages Trivy can identify (distro package DBs, language
+    lockfiles/metadata). Binaries copied in by hand, statically linked code,
+    or vendored source without metadata are invisible.
+  - "No fix available" findings are real exposure; the gate's policy accepts
+    them, it does not make them go away.
+  - Misconfiguration checks are generic best practices; they say nothing
+    about the app's own runtime configuration.
+  - The DB and checks bundle are fetched at scan time from mirror.gcr.io; the
+    gate trusts that channel (it is not hash-pinned, by nature).
 
 ## Supply-chain hygiene for the pipeline itself
 

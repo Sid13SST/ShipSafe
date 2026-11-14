@@ -38,11 +38,12 @@ workflow names, and commit messages.
   sast.yml                # reusable gate (workflow_call): Semgrep OSS, vendored rules
   secrets.yml             # reusable gate (workflow_call): Gitleaks, pinned binary
   dockerfile-lint.yml     # reusable gate (workflow_call): hadolint, pinned binary, + policy checks
+  container-scan.yml      # reusable gate (workflow_call): builds image, Trivy image + config scans
 .gitleaks.toml            # project secrets config: default rules + fixtures/ path allowlist ONLY
 .hadolint.yaml            # hadolint config: failure-threshold warning, nothing ignored
 demo-app/                 # minimal FastAPI app - the "clean" target; gates must PASS
   app/main.py
-  Dockerfile              # pinned-digest slim base, non-root uid 10001, healthcheck, no build secrets
+  Dockerfile              # pinned-digest slim base, security upgrades, pip removed, non-root 10001
   .dockerignore           # context = requirements.txt + app/ only
   requirements.txt        # runtime deps, fully pinned incl. transitive (lockfile)
   requirements-dev.txt    # test deps, fully pinned
@@ -53,6 +54,8 @@ fixtures/                 # DELIBERATELY VULNERABLE samples - gates must FAIL; n
   sast/vulnerable_app.py  # raises on import; scanned only
   secrets/                # fake, non-functional tokens matching Gitleaks default rules
   dockerfile/Dockerfile.vulnerable  # latest tag, root, ADD from .invalid URL, ...; never built
+  container-scan/         # old-base-image.txt (digest ref, scanned remotely, never run)
+                          # + Dockerfile.misconfig (trivy config only)
 rules/semgrep/
   python-security.yml     # vendored, reviewed Semgrep rules (offline, no registry)
   python-security.py      # annotated rule tests for `semgrep --test` (also deliberately vulnerable)
@@ -70,6 +73,9 @@ scripts/
   install_hadolint.sh     # installs pinned hadolint release, SHA-256 verified
   verify_dockerfile_lint.sh  # self-test: PASS on project, FAIL on fixture, guards
   verify_demo_image.sh    # builds demo image; checks uid 10001, healthy, API, no secret ARG/ENV
+  container_scan.py       # Trivy gate: image mode (vulns + image config) and config mode
+  install_trivy.sh        # installs pinned Trivy release, SHA-256 verified (see supply-chain note)
+  verify_container_scan.sh  # self-test: PASS on project, FAIL on fixtures, guards
   requirements-tools.txt  # pinned versions of gate tools (own venv - see below)
   tests/                  # offline unit tests for gate scripts
 docs/
@@ -115,6 +121,16 @@ docs/
   and without `HADOLINT_*` env vars; `.hadolint.yaml` may only set the
   threshold (a unit test enforces it). New Dockerfiles anywhere outside
   `fixtures/` are discovered and linted automatically.
+- **Trivy is installed from the release tarball only** (`install_trivy.sh`).
+  Never use `aquasecurity/trivy-action`, `setup-trivy` or a Trivy container
+  image - their tags/images were hijacked in March 2026 (CVE-2026-33634); a
+  unit test fails if a workflow references them. The container gate fails on
+  HIGH/CRITICAL vulns *with a fixed version*, any misconfiguration, any
+  image-config secret, or an EOL OS; unfixed vulns are reported only. Trivy
+  runs with `--config ""`, `--ignorefile ""` and no `TRIVY_*` env; inline
+  `trivy:ignore` comments make the gate ERROR. Results vary day to day with
+  the Trivy DB - a red container gate on an unchanged commit usually means a
+  new fix was published: rebuild/bump the base, don't suppress.
 - Workflows use `permissions: contents: read` and
   `persist-credentials: false` unless a gate needs more (document why).
 - Python 3.13, stdlib-only for gate scripts where practical.
@@ -128,6 +144,7 @@ accepts, so gate tools and the demo app cannot share one environment.
 python3 -m venv .venv-tools && .venv-tools/bin/pip install -r scripts/requirements-tools.txt -r demo-app/requirements-dev.txt
 python3 -m venv .venv && .venv/bin/pip install -r demo-app/requirements.txt -r demo-app/requirements-dev.txt
 bash scripts/install_gitleaks.sh .tools/bin && bash scripts/install_hadolint.sh .tools/bin
+bash scripts/install_trivy.sh .tools/bin
 export PATH="$PWD/.tools/bin:$PATH"
 ```
 
@@ -149,15 +166,22 @@ Run gate commands with `.venv-tools` activated and demo-app commands with
 | Dockerfile gate (as CI) | `python scripts/dockerfile_lint.py --discover . --exclude fixtures/ --forbid-path fixtures/` |
 | Dockerfile self-test | `bash scripts/verify_dockerfile_lint.sh` |
 | Demo image build + runtime check (needs Docker) | `bash scripts/verify_demo_image.sh demo-app` |
+| Container scan of a built image (as CI) | `docker build -t shipsafe-demo:ci demo-app && python scripts/container_scan.py image shipsafe-demo:ci` |
+| Container config scan (as CI) | `python scripts/container_scan.py config . --skip-dir fixtures --forbid-path fixtures/` |
+| Container-scan self-test (network) | `bash scripts/verify_container_scan.sh` |
 | Run the demo app | `cd demo-app && uvicorn app.main:app --reload` |
 | Lint workflows (optional) | `pip install actionlint-py shellcheck-py && actionlint` |
 
 The pip-audit steps need network access to PyPI's vulnerability data.
 The install scripts need to reach github.com once. The SAST, secrets and
-Dockerfile gates themselves need no network access. `verify_demo_image.sh`
-needs Docker plus access to Docker Hub and PyPI. (In a sandbox behind a
-TLS-intercepting proxy, build containers don't trust the proxy CA; verify
-with a scratch copy of `demo-app/` that adds the CA - never commit that.)
+Dockerfile gates themselves need no network access. The container-scan gate
+needs the Trivy DB and checks bundle (mirror.gcr.io) and, for the fixture, the
+fixture image's registry. Building the demo image needs Docker Hub, PyPI and
+deb.debian.org; the Dockerfile's `apt-get update --error-on=any` makes an
+unreachable mirror fail the build instead of silently skipping updates. (In a
+sandbox behind an HTTPS-only, TLS-intercepting proxy, build from a scratch copy
+of `demo-app/` that adds the proxy CA and switches apt to https - never commit
+that.)
 
 ## CI
 
@@ -176,6 +200,8 @@ with a scratch copy of `demo-app/` that adds the CA - never commit that.)
 | `dockerfile-lint` | pass | every Dockerfile outside fixtures/ passes hadolint (warning+) and SS001-SS004 - the real gate |
 | `dockerfile-lint-self-test` | pass | PASS on project, FAIL on fixture (hadolint + all SS rules), ERROR on forbidden/empty/unparseable, pragma + env can't weaken it, missing USER caught, info doesn't fail |
 | `demo-image` | pass | committed demo-app/Dockerfile builds; container runs as uid 10001, becomes healthy, serves the API |
+| `container-scan` | pass | demo image has no fixable HIGH/CRITICAL vuln, no image-config misconfig/secret, supported OS; config scan clean - the real gate (time-variant) |
+| `container-scan-self-test` | pass | config scan PASS on project / FAIL on fixture; ERROR on forbidden, inline ignore, empty, bad image; trivy.yaml/.trivyignore/env ignored; old image FAILs |
 
 ## Updating demo-app pins
 
@@ -191,6 +217,6 @@ Then rerun the demo-app tests and `scripts/verify_dependency_audit.sh`.
 ## Status
 
 Batch 0 (docs), Batch 1 (layout + dependency-audit gate), Batch 2
-(SAST gate), Batch 3 (secrets gate) and Batch 4 (Dockerfile gate) are
-done. See
+(SAST gate), Batch 3 (secrets gate), Batch 4 (Dockerfile gate) and Batch 5
+(container scan) are done. See
 `docs/TASKS.md` for what comes next.

@@ -62,12 +62,20 @@ Status: `[x]` done, `[ ]` not started.
 - Verification: unit tests, self-test, installer tamper test, image build/run, actionlint+shellcheck,
   other gates re-run
 
-## Batch 5 - Container scan (Trivy)  `[ ]`
+## Batch 5 - Container scan (Trivy)  `[x]`
 
-- [ ] Build demo image in CI; Trivy pinned by version + checksum
-- [ ] Fail on HIGH/CRITICAL vulns with available fixes; config/misconfig scan
-- [ ] Fixture: old base image reference / vulnerable image config
-- [ ] Reusable `container-scan.yml`, self-test; document advisory time-variance
+- [x] Trivy 0.76.2 pinned by version + per-platform SHA-256 (`scripts/install_trivy.sh`); no
+      trivy-action / setup-trivy / Trivy image (March 2026 compromise, CVE-2026-33634); linux binary
+      cross-checked against the Docker Hub and GHCR images
+- [x] `scripts/container_scan.py`: image mode (vuln + image-config misconfig/secret) and config mode;
+      FAIL on fixable HIGH/CRITICAL, any misconfig, secrets, EOL OS; unfixed reported only
+- [x] Fail closed: trivy error/no report, wrong artifact, OS not detected, DB > 72h old, nothing
+      scanned, forbidden path, inline `trivy:ignore`; trivy.yaml/.trivyignore/TRIVY_* disabled
+- [x] Demo image hardened to pass: `apt-get upgrade` (with `--error-on=any`), pip removed after install
+- [x] Fixtures: `old-base-image.txt` (scanned remotely, never run) + `Dockerfile.misconfig`
+- [x] Reusable `container-scan.yml` (builds image, both scans) + CI jobs; self-test (8 checks); unit tests
+- [x] Time-variance documented (DESIGN, README, CLAUDE.md, workflow, script)
+- Verification: unit tests, self-test, installer tamper test, real image scan, other gates re-run
 
 ## Batch 6 - Hardening and reuse  `[ ]`
 
@@ -79,6 +87,10 @@ Status: `[x]` done, `[ ]` not started.
 - [ ] hadolint: move to 2.15.x once its checksums can be verified against an upstream-published source
 - [ ] Demo image: install deps with `pip --require-hashes` (needs a hash-pinned requirements lock)
 - [ ] Dockerfile policy parser: interpret heredoc (`RUN <<EOF`) bodies; today they are not inspected
+- [ ] Trivy: verify the release's Sigstore bundle (cosign) when bumping the pin - not done for 0.76.2
+- [ ] Container scan: cache the Trivy DB between CI runs; consider a scheduled (nightly) run so
+      time-variant failures surface without a commit
+- [ ] Container scan: waiver path for unfixable-but-accepted findings (with expiry)
 - [ ] Cross-repo reuse: workflows check out ShipSafe scripts at a pinned ref (or composite actions); usage example
 - [ ] Optional SARIF upload to GitHub code scanning (free for public repos)
 - [ ] Dependabot/Renovate config for action + tool pin updates

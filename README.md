@@ -18,7 +18,7 @@ real issues.
 | SAST | [Semgrep](https://github.com/semgrep/semgrep) OSS CLI, vendored rules, offline | Implemented |
 | Secrets detection | [Gitleaks](https://github.com/gitleaks/gitleaks) OSS CLI, pinned + checksum-verified binary | Implemented |
 | Dockerfile lint | [hadolint](https://github.com/hadolint/hadolint), pinned + checksum-verified binary, plus 4 ShipSafe policy checks | Implemented |
-| Container image scan | [Trivy](https://github.com/aquasecurity/trivy) | Planned |
+| Container image scan | [Trivy](https://github.com/aquasecurity/trivy), pinned + checksum-verified release binary (no Trivy actions/images) | Implemented |
 
 All tooling is free and open source.
 
@@ -55,12 +55,18 @@ python3 -m venv .venv-tools && .venv-tools/bin/pip install -r scripts/requiremen
 ```
 
 ```bash
-bash scripts/install_gitleaks.sh .tools/bin && bash scripts/install_hadolint.sh .tools/bin && export PATH="$PWD/.tools/bin:$PATH"
+bash scripts/install_gitleaks.sh .tools/bin && bash scripts/install_hadolint.sh .tools/bin && bash scripts/install_trivy.sh .tools/bin && export PATH="$PWD/.tools/bin:$PATH"
 ```
 
 ```bash
-. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh && bash scripts/verify_secrets.sh && bash scripts/verify_dockerfile_lint.sh
+. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh && bash scripts/verify_secrets.sh && bash scripts/verify_dockerfile_lint.sh && bash scripts/verify_container_scan.sh
 ```
+
+> **Results change over time.** The dependency audit and container scan
+> compare against advisory databases that are updated daily. A commit that
+> was green yesterday can turn red today because a new vulnerability - or a
+> new fix for an old one - was published. That is the intended behaviour; it
+> also means a green run is a statement about that day's data only.
 
 The demo app uses its own venv (`.venv`); see [CLAUDE.md](CLAUDE.md).
 
