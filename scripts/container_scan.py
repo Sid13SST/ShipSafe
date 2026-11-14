@@ -27,6 +27,12 @@ Exit codes (same contract as every ShipSafe gate):
              was scanned, or a scanned file carries an inline `trivy:ignore`.
              Fails closed.
 
+Waivers: vulnerability and misconfiguration findings can be waived for a
+limited time in .shipsafe/waivers.yml (gate: container-scan; id = CVE/GHSA or
+DS-xxxx id; optional scope = package name or target). Image secrets and an
+end-of-support OS cannot be waived. An expired waiver FAILS the gate; an
+invalid waivers file is an ERROR. Waivers are the only accepted suppression.
+
 Suppression: Trivy runs with `--config ""` and `--ignorefile ""` (so neither
 trivy.yaml nor .trivyignore is loaded) and without any TRIVY_* environment
 variables. Inline `trivy:ignore` comments cannot be switched off in Trivy, so
@@ -51,6 +57,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import waivers as wv
+
 EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_ERROR = 2
@@ -67,6 +75,7 @@ class Finding:
     severity: str
     target: str
     detail: str
+    package: str = ""
 
 
 @dataclass
@@ -77,12 +86,15 @@ class ScanResult:
     problems: list[str] = field(default_factory=list)
     os_name: str = ""
     targets: list[str] = field(default_factory=list)
+    waived: list = field(default_factory=list)      # (finding, waiver)
+    expired: list[str] = field(default_factory=list)  # expired-waiver messages (fail the gate)
+    unused: list = field(default_factory=list)      # waivers that matched nothing
 
     @property
     def exit_code(self) -> int:
         if self.problems:
             return EXIT_ERROR
-        return EXIT_FAIL if self.failing else EXIT_PASS
+        return EXIT_FAIL if (self.failing or self.expired) else EXIT_PASS
 
 
 class ScanError(ValueError):
@@ -141,7 +153,8 @@ def evaluate(report: object, mode: str, artifact: str, forbid: list[str] | None 
             if sev in FAIL_VULN_SEVERITIES and fixed:
                 result.failing.append(Finding(
                     "vuln", str(v.get("VulnerabilityID", "?")), sev, target,
-                    f"{v.get('PkgName', '?')} {v.get('InstalledVersion', '?')} -> fixed in {fixed}"))
+                    f"{v.get('PkgName', '?')} {v.get('InstalledVersion', '?')} -> fixed in {fixed}",
+                    package=str(v.get("PkgName", ""))))
             else:
                 key = f"{sev} {'fixable' if fixed else 'no fix yet'}"
                 info[key] = info.get(key, 0) + 1
@@ -210,9 +223,22 @@ def render(result: ScanResult) -> str:
         lines.append(f"  - [{f.kind}] {f.ident} {f.severity} {f.detail} ({f.target})")
     if len(result.failing) > MAX_LISTED:
         lines.append(f"  ... and {len(result.failing) - MAX_LISTED} more failing finding(s)")
+    lines += wv.render_lines(
+        [f"[{f.kind}] {f.ident} {f.severity} {f.detail} until {w.expires.isoformat()} ({w.reason})" for f, w in result.waived],
+        result.unused, result.expired)
     for p in result.problems:
         lines.append(f"  - SCAN PROBLEM: {p}")
     return "\n".join(lines)
+
+
+WAIVABLE_KINDS = {"vuln", "misconfig"}
+
+
+def apply_waivers(result: ScanResult, ws: wv.WaiverSet) -> None:
+    remaining, waived, unused = wv.apply(
+        ws, result.failing, key=lambda f: ([f.ident], [f.package, f.target]),
+        waivable=lambda f: f.kind in WAIVABLE_KINDS)
+    result.failing, result.waived, result.unused, result.expired = remaining, waived, unused, ws.expired_messages()
 
 
 # --- running trivy --------------------------------------------------------------
@@ -305,11 +331,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-dir", help="Trivy cache directory (DB location)")
     parser.add_argument("--report", type=Path, help="also save the raw Trivy JSON report here")
     parser.add_argument("--trivy", default="trivy", help="trivy executable")
+    parser.add_argument("--waivers", type=Path, default=wv.DEFAULT_PATH,
+                        help="waivers file (default: .shipsafe/waivers.yml; missing = no waivers)")
     a = parser.parse_args(argv)
 
     try:
+        ws = wv.load(a.waivers, "container-scan")
         result = scan_image(a) if a.mode == "image" else scan_config(a)
+        apply_waivers(result, ws)
         text, code = render(result), result.exit_code
+    except wv.WaiverFileError as exc:
+        text, code = f"container-scan [{a.mode} {a.target}]: ERROR - invalid waivers file: {exc}", EXIT_ERROR
     except (ScanError, OSError) as exc:
         text, code = f"container-scan [{a.mode} {a.target}]: ERROR - {exc}", EXIT_ERROR
     print(text)

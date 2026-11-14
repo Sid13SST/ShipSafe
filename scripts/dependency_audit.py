@@ -12,6 +12,11 @@ Exit codes (stable; CI and the self-test rely on them):
              unauditable package, unreadable report). Fails closed: an audit
              that did not run is never reported as a pass.
 
+Waivers: findings can be waived for a limited time in .shipsafe/waivers.yml
+(gate: dependency-audit; id matches the advisory id or any alias; optional
+scope = package name). An expired waiver FAILS the run; an invalid waivers
+file is an ERROR. See scripts/waivers.py.
+
 Scope note: a PASS means "no advisory in the PyPI/OSV data pip-audit queried
 matched these exact pins at the time of the run". It is not a guarantee that
 the dependencies are free of vulnerabilities.
@@ -27,6 +32,8 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import waivers as wv
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -47,6 +54,7 @@ class AuditResult:
     audited: int
     findings: list[Finding]
     skipped: list[tuple[str, str]]  # (package, reason)
+    waived: list[tuple[Finding, wv.Waiver]] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
@@ -103,9 +111,19 @@ def render(result: AuditResult, label: str) -> str:
         alias = f" ({', '.join(f.aliases)})" if f.aliases else ""
         fix = ", ".join(f.fix_versions) if f.fix_versions else "none listed"
         lines.append(f"  - {f.package}=={f.version}: {f.vuln_id}{alias}; fixed in: {fix}")
+    for f, w in result.waived:
+        lines.append(f"  - WAIVED: {f.package}=={f.version}: {f.vuln_id} until {w.expires.isoformat()} ({w.reason})")
     for name, reason in result.skipped:
         lines.append(f"  - {name}: NOT AUDITED ({reason})")
     return "\n".join(lines)
+
+
+def apply_waivers(result: AuditResult, ws: wv.WaiverSet) -> set[wv.Waiver]:
+    """Move waived findings out of result.findings; return the waivers used."""
+    remaining, waived, _ = wv.apply(ws, result.findings,
+                                    key=lambda f: ([f.vuln_id, *f.aliases], [f.package]))
+    result.findings, result.waived = remaining, waived
+    return {w for _, w in waived}
 
 
 def run_pip_audit(requirements: Path, pip_audit: str) -> object:
@@ -138,10 +156,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("requirements", nargs="+", type=Path, help="pinned requirements file(s)")
     parser.add_argument("--pip-audit", default="pip-audit", help="pip-audit executable")
+    parser.add_argument("--waivers", type=Path, default=wv.DEFAULT_PATH,
+                        help="waivers file (default: .shipsafe/waivers.yml; missing = no waivers)")
     args = parser.parse_args(argv)
 
     worst = EXIT_PASS
     summary: list[str] = []
+    try:
+        ws = wv.load(args.waivers, "dependency-audit")
+    except wv.WaiverFileError as exc:
+        text = f"dependency-audit: ERROR - invalid waivers file: {exc}"
+        print(text)
+        _write_summary([text])
+        return EXIT_ERROR
+    used: set[wv.Waiver] = set()
     for req in args.requirements:
         if not req.is_file():
             text = f"dependency-audit [{req}]: ERROR - file not found"
@@ -149,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             try:
                 result = parse_report(run_pip_audit(req, args.pip_audit))
+                used |= apply_waivers(result, ws)
                 text, code = render(result, str(req)), result.exit_code
             except (ReportError, OSError) as exc:
                 text, code = f"dependency-audit [{req}]: ERROR - {exc}", EXIT_ERROR
@@ -156,11 +185,21 @@ def main(argv: list[str] | None = None) -> int:
         summary.append(text)
         worst = max(worst, code)
 
+    tail = wv.render_lines([], [w for w in ws.active if w not in used], ws.expired_messages())
+    if tail:
+        print("dependency-audit waivers:\n" + "\n".join(tail))
+        summary.append("\n".join(tail))
+    if ws.expired:
+        worst = max(worst, EXIT_FAIL)
+    _write_summary(summary)
+    return worst
+
+
+def _write_summary(summary: list[str]) -> None:
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:
         with open(step_summary, "a", encoding="utf-8") as fh:
             fh.write("### Dependency audit (pip-audit)\n\n```\n" + "\n".join(summary) + "\n```\n")
-    return worst
 
 
 if __name__ == "__main__":

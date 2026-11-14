@@ -17,6 +17,11 @@ of 1.185.0, reports no error for files it cannot parse - they count as
 scanned with no findings. The gate therefore re-parses every scanned .py
 file with Python's own `ast` and treats a failure as ERROR.
 
+Waivers: failing findings can be waived for a limited time in
+.shipsafe/waivers.yml (gate: sast; id = rule id, e.g.
+shipsafe.subprocess-shell-true; optional scope = file path or glob). An
+expired waiver FAILS the gate; an invalid waivers file is an ERROR.
+
 Scope note: a PASS means "these vendored patterns did not match the scanned
 files". It is not evidence that the code is free of vulnerabilities.
 """
@@ -30,8 +35,10 @@ import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+import waivers as wv
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -63,6 +70,9 @@ class ScanResult:
     scanned: list[str]
     findings: list[Finding]
     problems: list[str]  # reasons the scan cannot be trusted
+    waived: list = field(default_factory=list)      # (finding, waiver)
+    expired: list[str] = field(default_factory=list)  # expired-waiver messages (fail the gate)
+    unused: list = field(default_factory=list)      # waivers that matched nothing
 
     @property
     def failing(self) -> list[Finding]:
@@ -72,7 +82,7 @@ class ScanResult:
     def exit_code(self) -> int:
         if self.problems:
             return EXIT_ERROR
-        return EXIT_FAIL if self.failing else EXIT_PASS
+        return EXIT_FAIL if (self.failing or self.expired) else EXIT_PASS
 
 
 class ReportError(ValueError):
@@ -161,9 +171,20 @@ def render(result: ScanResult, label: str) -> str:
     for f in result.findings:
         tag = "" if f.failing else " (informational, does not fail)"
         lines.append(f"  - {f.path}:{f.line} [{f.severity}] {f.rule}{tag}")
+    lines += wv.render_lines(
+        [f"{f.path}:{f.line} [{f.severity}] {f.rule} until {w.expires.isoformat()} ({w.reason})" for f, w in result.waived],
+        result.unused, result.expired)
     for p in result.problems:
         lines.append(f"  - SCAN PROBLEM: {p}")
     return "\n".join(lines)
+
+
+def apply_waivers(result: ScanResult, ws: wv.WaiverSet) -> None:
+    failing = [f for f in result.findings if f.failing]
+    _, waived, unused = wv.apply(ws, failing, key=lambda f: ([f.rule], [f.path]))
+    waived_ids = {id(f) for f, _ in waived}
+    result.findings = [f for f in result.findings if id(f) not in waived_ids]
+    result.waived, result.unused, result.expired = waived, unused, ws.expired_messages()
 
 
 def run_semgrep(semgrep: str, config: Path, targets: list[str], excludes: list[str], report_out: Path | None) -> object:
@@ -208,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="fail with ERROR if any scanned file is under this path (repeatable)")
     parser.add_argument("--report", type=Path, help="also save the raw Semgrep JSON report here")
     parser.add_argument("--semgrep", default="semgrep", help="semgrep executable")
+    parser.add_argument("--waivers", type=Path, default=wv.DEFAULT_PATH,
+                        help="waivers file (default: .shipsafe/waivers.yml; missing = no waivers)")
     args = parser.parse_args(argv)
 
     label = " ".join(args.targets)
@@ -218,7 +241,10 @@ def main(argv: list[str] | None = None) -> int:
             report = run_semgrep(args.semgrep, args.config, args.targets, args.exclude, args.report)
             result = parse_report(report, args.forbid_path)
             result.problems += unparseable_python(result.scanned)
+            apply_waivers(result, wv.load(args.waivers, "sast"))
             text, code = render(result, label), result.exit_code
+        except wv.WaiverFileError as exc:
+            text, code = f"sast [{label}]: ERROR - invalid waivers file: {exc}", EXIT_ERROR
         except (ReportError, OSError, ValueError) as exc:
             text, code = f"sast [{label}]: ERROR - {exc}", EXIT_ERROR
     print(text)

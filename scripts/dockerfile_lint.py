@@ -24,6 +24,11 @@ Suppression: inline `# hadolint ignore=` pragmas are disabled
 (--disable-ignore-pragma) and HADOLINT_* environment variables are removed,
 so the reviewed .hadolint.yaml is the only configuration that applies.
 
+Waivers: failing findings can be waived for a limited time in
+.shipsafe/waivers.yml (gate: dockerfile-lint; id = DLxxxx/SCxxxx/SSxxx code;
+optional scope = Dockerfile path or glob). An expired waiver FAILS the gate;
+an invalid waivers file is an ERROR.
+
 Scope note: a PASS means "these lint rules found nothing in the Dockerfile
 text". It says nothing about vulnerabilities inside the base image or the
 installed packages (that is the container-scan gate's job).
@@ -39,6 +44,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import waivers as wv
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -72,6 +79,9 @@ class LintResult:
     files: list[str] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    waived: list = field(default_factory=list)      # (finding, waiver)
+    expired: list[str] = field(default_factory=list)  # expired-waiver messages (fail the gate)
+    unused: list = field(default_factory=list)      # waivers that matched nothing
 
     @property
     def failing(self) -> list[Finding]:
@@ -81,7 +91,7 @@ class LintResult:
     def exit_code(self) -> int:
         if self.problems:
             return EXIT_ERROR
-        return EXIT_FAIL if self.failing else EXIT_PASS
+        return EXIT_FAIL if (self.failing or self.expired) else EXIT_PASS
 
 
 class LintError(ValueError):
@@ -277,9 +287,20 @@ def render(result: LintResult, label: str) -> str:
     for f in result.findings:
         tag = "" if f.failing else " (informational, does not fail)"
         lines.append(f"  - {f.path}:{f.line} [{f.level}] {f.code} {f.message[:110]}{tag}")
+    lines += wv.render_lines(
+        [f"{f.path}:{f.line} [{f.level}] {f.code} until {w.expires.isoformat()} ({w.reason})" for f, w in result.waived],
+        result.unused, result.expired)
     for p in result.problems:
         lines.append(f"  - LINT PROBLEM: {p}")
     return "\n".join(lines)
+
+
+def apply_waivers(result: LintResult, ws: wv.WaiverSet) -> None:
+    failing = [f for f in result.findings if f.failing]
+    _, waived, unused = wv.apply(ws, failing, key=lambda f: ([f.code], [f.path]))
+    waived_ids = {id(f) for f, _ in waived}
+    result.findings = [f for f in result.findings if id(f) not in waived_ids]
+    result.waived, result.unused, result.expired = waived, unused, ws.expired_messages()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -290,6 +311,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--forbid-path", action="append", default=[], help="ERROR if a selected file is under this path (repeatable)")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="hadolint config (default: .hadolint.yaml)")
     parser.add_argument("--hadolint", default="hadolint", help="hadolint executable")
+    parser.add_argument("--waivers", type=Path, default=wv.DEFAULT_PATH,
+                        help="waivers file (default: .shipsafe/waivers.yml; missing = no waivers)")
     args = parser.parse_args(argv)
 
     files = list(args.dockerfiles)
@@ -297,8 +320,12 @@ def main(argv: list[str] | None = None) -> int:
         files += discover(args.discover, args.exclude)
     label = f"discover {args.discover}" if args.discover is not None else " ".join(args.dockerfiles)
     try:
+        ws = wv.load(args.waivers, "dockerfile-lint")
         result = lint(files, args.config, args.hadolint, args.forbid_path)
+        apply_waivers(result, ws)
         text, code = render(result, label), result.exit_code
+    except wv.WaiverFileError as exc:
+        text, code = f"dockerfile-lint [{label}]: ERROR - invalid waivers file: {exc}", EXIT_ERROR
     except (LintError, OSError) as exc:
         text, code = f"dockerfile-lint [{label}]: ERROR - {exc}", EXIT_ERROR
     print(text)
