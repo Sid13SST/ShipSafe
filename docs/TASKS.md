@@ -33,12 +33,17 @@ Status: `[x]` done, `[ ]` not started.
 - [x] `scripts/verify_sast.sh` + offline unit tests (`scripts/tests/test_sast.py`)
 - Verification: rule tests, unit tests, self-test script, actionlint+shellcheck
 
-## Batch 3 - Secrets gate (Gitleaks)  `[ ]`
+## Batch 3 - Secrets gate (Gitleaks)  `[x]`
 
-- [ ] Pin Gitleaks binary by version + checksum (free OSS CLI, not the paid action)
-- [ ] `.gitleaks.toml` with explicit `fixtures/` allowlist for the app scan
-- [ ] `fixtures/secrets/` with clearly fake, non-functional tokens matching default rules
-- [ ] `scripts/secrets_scan.sh|py`, reusable `secrets.yml`, self-test
+- [x] Pin Gitleaks 8.30.1 by version + per-platform SHA-256 in `scripts/install_gitleaks.sh` (OSS CLI, not the action)
+- [x] `.gitleaks.toml`: default rules + a single anchored `fixtures/` path allowlist; unit test pins its shape
+- [x] `rules/gitleaks/default-only.toml` for the fixture scan (no allowlist)
+- [x] `fixtures/secrets/` - fake AWS key ID, GitHub-style token (bad checksum), generic API key, PEM-shaped block
+- [x] `scripts/secrets_scan.py`: dir/git modes, `--redact`, ignores `gitleaks:allow`, ERROR on
+      `.gitleaksignore`, 0 bytes/commits scanned, shallow clone, gitleaks failure
+- [x] Reusable `secrets.yml` (full-history scan, `fetch-depth: 0`) + CI jobs
+- [x] `scripts/verify_secrets.sh` (9 checks) + offline unit tests (`scripts/tests/test_secrets_scan.py`)
+- Verification: unit tests, self-test, installer tamper test, actionlint+shellcheck, other gates re-run
 
 ## Batch 4 - Dockerfile lint (hadolint)  `[ ]`
 
@@ -60,6 +65,7 @@ Status: `[x]` done, `[ ]` not started.
 - [ ] Hash-pin tool installs (`--require-hashes`)
 - [ ] Dependency-audit `scripts/requirements-tools.txt` itself (tool supply chain)
 - [ ] Decide whether SAST should also scan `tests/` directories (Semgrep skips them by default)
+- [ ] Secrets: decide on a reviewed waiver path for real false positives (today: widen `.gitleaks.toml` + its test)
 - [ ] Cross-repo reuse: workflows check out ShipSafe scripts at a pinned ref (or composite actions); usage example
 - [ ] Optional SARIF upload to GitHub code scanning (free for public repos)
 - [ ] Dependabot/Renovate config for action + tool pin updates

@@ -145,13 +145,54 @@ confidence, which is worse than no gate.
     still raises a WARNING). There is no inline-suppression policy yet;
     `# nosemgrep` works but should be reviewed like a waiver (Batch 6).
 
-### 3. Secrets detection - Gitleaks (planned)
+### 3. Secrets detection - Gitleaks (implemented, Batch 3)
 
-Gitleaks on the working tree (and history for pushes). Fixture uses obviously
-fake, non-functional tokens in a format that matches default rules; the app
-scan excludes `fixtures/` via config. Blind spots: only pattern/entropy
-matches; secrets in unscanned places (CI variables, other repos) are out of
-scope.
+- **Tool:** Gitleaks 8.30.1 OSS CLI (MIT). Installed by
+  `scripts/install_gitleaks.sh`, which pins the version and the SHA-256 of
+  each platform's release tarball in the repo and aborts on mismatch. The
+  `gitleaks-action` is not used (it needs a licence key for organisations).
+- **Rules:** Gitleaks' built-in default rule set (`[extend] useDefault = true`).
+- **Target:** CI scans the **full git history** (`gitleaks git`, checkout
+  with `fetch-depth: 0`), so a secret that was committed and later deleted
+  still fails the gate. Locally, `--mode dir` scans the working tree,
+  including uncommitted and git-ignored files.
+- **Allowlist:** `.gitleaks.toml` allowlists exactly one thing, the path regex
+  `^(\./)?fixtures/`. A unit test fails if the file gains any other
+  suppression (regexes, stopwords, commits, rule overrides). The self-test
+  scans the project with default rules and no allowlist and checks that every
+  finding is under `fixtures/`, so the allowlist provably hides nothing else.
+- **Suppression bypasses closed:**
+  - inline `gitleaks:allow` comments are ignored (`--ignore-gitleaks-allow`);
+  - Gitleaks 8.30.1 always reads a `.gitleaksignore` from the scanned
+    directory, even when `--gitleaks-ignore-path` points elsewhere (verified
+    while building this). The gate therefore ERRORs if one exists anywhere in
+    the target, before running Gitleaks;
+  - `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` are removed from the
+    environment and the config is always passed explicitly.
+- **Fails on:** any finding.
+- **Errors on (fails closed):** missing config/target, Gitleaks non-zero exit
+  (it runs with `--exit-code 0`, so non-zero means a tool error), missing or
+  invalid report, "scanned ~0 bytes" or no volume line in the log, 0 commits
+  in git mode, git mode on a shallow clone or non-repository, `.gitleaksignore`
+  present.
+- **Output:** rule id, file, line and commit only. `--redact` keeps secret
+  values out of Gitleaks' logs and report; no report is uploaded as an
+  artifact.
+- **Fixture:** `fixtures/secrets/` - a made-up AWS access key ID, a
+  GitHub-style token with an invalid checksum, a random generic API key, and a
+  PEM-shaped block whose body is plain text. None was ever issued by a
+  provider.
+- **Blind spots / honest notes:**
+  - Pattern + entropy matching only. Secrets in formats the default rules
+    don't know, low-entropy passwords, or split/encoded values pass.
+  - Only this repository's history and tree. Secrets in CI variables, issue
+    comments, other repos, container images or logs are out of scope.
+  - Detection is after the fact: a secret found in history has already been
+    pushed and must be rotated; removing it from the tree does not un-leak it.
+  - The volume check parses Gitleaks' log text; a future log-format change
+    would make the gate ERROR (fail closed), not pass.
+  - No waiver path for genuine false positives yet other than a reviewed
+    change to `.gitleaks.toml` and its unit test.
 
 ### 4. Dockerfile lint - hadolint (planned)
 
@@ -169,6 +210,8 @@ pip-audit.
 ## Supply-chain hygiene for the pipeline itself
 
 - Third-party actions pinned to full commit SHAs.
+- Downloaded binaries (Gitleaks) pinned by SHA-256 in the repo, not trusted
+  from a checksums file fetched alongside them.
 - Tool versions pinned in `scripts/requirements-tools.txt` (later batches may
   add hashes).
 - Least-privilege `permissions:`; `persist-credentials: false` on checkout.

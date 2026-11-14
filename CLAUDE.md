@@ -36,6 +36,8 @@ workflow names, and commit messages.
   ci.yml                  # entry pipeline: tests, gates on the project, gate self-tests
   dependency-audit.yml    # reusable gate (workflow_call): pip-audit
   sast.yml                # reusable gate (workflow_call): Semgrep OSS, vendored rules
+  secrets.yml             # reusable gate (workflow_call): Gitleaks, pinned binary
+.gitleaks.toml            # project secrets config: default rules + fixtures/ path allowlist ONLY
 demo-app/                 # minimal FastAPI app - the "clean" target; gates must PASS
   app/main.py
   requirements.txt        # runtime deps, fully pinned incl. transitive (lockfile)
@@ -45,14 +47,20 @@ fixtures/                 # DELIBERATELY VULNERABLE samples - gates must FAIL; n
   README.md               # index of what each fixture seeds
   dependency-audit/vulnerable-requirements.txt
   sast/vulnerable_app.py  # raises on import; scanned only
+  secrets/                # fake, non-functional tokens matching Gitleaks default rules
 rules/semgrep/
   python-security.yml     # vendored, reviewed Semgrep rules (offline, no registry)
   python-security.py      # annotated rule tests for `semgrep --test` (also deliberately vulnerable)
+rules/gitleaks/
+  default-only.toml       # default rules, no allowlist - self-test only (fixture scan)
 scripts/
   dependency_audit.py     # gate logic shared by CI and local runs
   verify_dependency_audit.sh  # self-test: PASS on app, FAIL on fixture, ERROR on unpinned
   sast.py                 # Semgrep gate logic shared by CI and local runs
   verify_sast.sh          # self-test: rule tests, PASS on project, FAIL on fixture, guards
+  secrets_scan.py         # Gitleaks gate logic shared by CI and local runs
+  install_gitleaks.sh     # installs pinned Gitleaks release, SHA-256 verified
+  verify_secrets.sh       # self-test: PASS on project (tree + history), FAIL on fixture, guards
   requirements-tools.txt  # pinned versions of gate tools (own venv - see below)
   tests/                  # offline unit tests for gate scripts
 docs/
@@ -82,6 +90,14 @@ docs/
   `--disable-version-check`, `--oss-only`. Never use `--config auto`/`p/...`
   (registry) or `semgrep --validate` (it fetches lint rules from semgrep.dev).
   New rules need annotated `ruleid`/`ok` cases in `python-security.py`.
+- **Secrets: one suppression mechanism.** Only the path allowlist in
+  `.gitleaks.toml` may suppress findings, and a unit test pins it to
+  `^(\./)?fixtures/`. The gate ignores inline `gitleaks:allow` comments and
+  errors if any `.gitleaksignore` exists. Fake tokens built in scripts/tests
+  must be assembled from pieces at runtime so the project scan stays green.
+  Never print secret values (Gitleaks runs with `--redact`).
+- **Binary tools** (Gitleaks) are pinned by version *and* per-platform
+  SHA-256 inside their install script; a mismatch aborts the install.
 - Workflows use `permissions: contents: read` and
   `persist-credentials: false` unless a gate needs more (document why).
 - Python 3.13, stdlib-only for gate scripts where practical.
@@ -94,6 +110,7 @@ accepts, so gate tools and the demo app cannot share one environment.
 ```bash
 python3 -m venv .venv-tools && .venv-tools/bin/pip install -r scripts/requirements-tools.txt -r demo-app/requirements-dev.txt
 python3 -m venv .venv && .venv/bin/pip install -r demo-app/requirements.txt -r demo-app/requirements-dev.txt
+bash scripts/install_gitleaks.sh .tools/bin && export PATH="$PWD/.tools/bin:$PATH"
 ```
 
 Run gate commands with `.venv-tools` activated and demo-app commands with
@@ -108,11 +125,15 @@ Run gate commands with `.venv-tools` activated and demo-app commands with
 | SAST gate on the project | `python scripts/sast.py . --exclude fixtures/ --exclude rules/semgrep/python-security.py --forbid-path fixtures/` |
 | SAST rule tests | `semgrep --test --metrics=off rules/semgrep` |
 | SAST self-test | `bash scripts/verify_sast.sh` |
+| Secrets gate, working tree | `python scripts/secrets_scan.py . --mode dir` |
+| Secrets gate, full history (as CI) | `python scripts/secrets_scan.py . --mode git` |
+| Secrets self-test | `bash scripts/verify_secrets.sh` |
 | Run the demo app | `cd demo-app && uvicorn app.main:app --reload` |
 | Lint workflows (optional) | `pip install actionlint-py shellcheck-py && actionlint` |
 
-The pip-audit steps need network access to PyPI's vulnerability data. The
-SAST gate needs no network access.
+The pip-audit steps need network access to PyPI's vulnerability data.
+`install_gitleaks.sh` needs to reach github.com once. The SAST and secrets
+gates themselves need no network access.
 
 ## CI
 
@@ -126,6 +147,8 @@ SAST gate needs no network access.
 | `dependency-audit-self-test` | pass | gate PASSes clean app, FAILs the fixture, ERRORs on unpinned input |
 | `sast` | pass | no ERROR/WARNING Semgrep finding in the project (fixtures/ excluded) - the real gate |
 | `sast-self-test` | pass | rule tests pass; gate PASSes project, FAILs fixture, ERRORs if fixtures/ is scanned or Python is unparseable, ignores INFO |
+| `secrets` | pass | Gitleaks found nothing in the full git history (fixtures/ allowlisted) - the real gate |
+| `secrets-self-test` | pass | PASS on tree + history, FAIL on fixture, allowlist hides only fixtures/, ERROR on .gitleaksignore / empty / shallow, inline allow ignored, deleted secret still caught |
 
 ## Updating demo-app pins
 
@@ -140,6 +163,6 @@ Then rerun the demo-app tests and `scripts/verify_dependency_audit.sh`.
 
 ## Status
 
-Batch 0 (docs), Batch 1 (layout + dependency-audit gate) and Batch 2
-(SAST gate) are done. See
+Batch 0 (docs), Batch 1 (layout + dependency-audit gate), Batch 2
+(SAST gate) and Batch 3 (secrets gate) are done. See
 `docs/TASKS.md` for what comes next.

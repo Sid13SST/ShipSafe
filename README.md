@@ -16,7 +16,7 @@ real issues.
 |------|------|--------|
 | Dependency vulnerability audit | [pip-audit](https://github.com/pypa/pip-audit) | Implemented |
 | SAST | [Semgrep](https://github.com/semgrep/semgrep) OSS CLI, vendored rules, offline | Implemented |
-| Secrets detection | [Gitleaks](https://github.com/gitleaks/gitleaks) | Planned |
+| Secrets detection | [Gitleaks](https://github.com/gitleaks/gitleaks) OSS CLI, pinned + checksum-verified binary | Implemented |
 | Dockerfile lint | [hadolint](https://github.com/hadolint/hadolint) | Planned |
 | Container image scan | [Trivy](https://github.com/aquasecurity/trivy) | Planned |
 
@@ -41,6 +41,8 @@ Gates fail closed: if a tool cannot complete the audit, the gate reports
 demo-app/            minimal FastAPI app (the clean target)
 fixtures/            DELIBERATELY VULNERABLE samples - never install or run
 rules/semgrep/       vendored, reviewed Semgrep rules + their annotated tests
+rules/gitleaks/      default-rules-only config used by the secrets self-test
+.gitleaks.toml       project secrets config (default rules + fixtures/ allowlist only)
 scripts/             gate logic + self-test scripts (same code in CI and locally)
 docs/                DESIGN.md (architecture, scope), TASKS.md (build plan)
 ```
@@ -52,7 +54,11 @@ python3 -m venv .venv-tools && .venv-tools/bin/pip install -r scripts/requiremen
 ```
 
 ```bash
-. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh
+bash scripts/install_gitleaks.sh .tools/bin && export PATH="$PWD/.tools/bin:$PATH"
+```
+
+```bash
+. .venv-tools/bin/activate && bash scripts/verify_dependency_audit.sh && bash scripts/verify_sast.sh && bash scripts/verify_secrets.sh
 ```
 
 The demo app uses its own venv (`.venv`); see [CLAUDE.md](CLAUDE.md).
