@@ -1,0 +1,17 @@
+# ShipSafe waivers - time-boxed, reviewed exceptions for gate findings.
+#
+# Every entry is a change the repository owner reviews. Format and rules are
+# documented in scripts/waivers.py and docs/DESIGN.md ("Waivers"):
+#   - id, gate, reason (>= 20 chars) and expires (YYYY-MM-DD, <= 90 days ahead)
+#     are required; scope (package or path, glob ok) is optional;
+#   - an EXPIRED waiver fails the gate; an invalid file errors the gate;
+#   - secrets findings and scan errors can never be waived.
+#
+# Example (not active):
+#   waivers:
+#     - id: CVE-2026-12345
+#       gate: container-scan
+#       reason: "No Debian fix published yet; image not internet-facing; issue 12"
+#       expires: 2026-12-31
+#       scope: zlib1g
+waivers: []
