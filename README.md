@@ -93,3 +93,26 @@ Design and per-gate limitations: [docs/DESIGN.md](docs/DESIGN.md).
 
 Everything under `fixtures/` is intentionally vulnerable and exists only to be
 scanned. See [fixtures/README.md](fixtures/README.md).
+
+
+## Limitations at a glance
+
+Short version. Per-gate detail, blind spots and the policy defaults are in
+[docs/DESIGN.md](docs/DESIGN.md).
+
+- A green run means the configured tools, with their current rules and advisory
+  data, reported nothing on that day. It is not a security guarantee.
+- Which findings fail the build and which are only reported is a project default
+  for the repository owner to review. It has not been accepted as a risk decision.
+- Dependency audit and container scan results change over time as new advisories
+  are published, so the same commit can pass today and fail later.
+- SAST (Semgrep, vendored offline rules) and Dockerfile lint cover only the rules
+  and patterns they ship with. Many bug classes are not detected.
+- Secrets detection finds known patterns and high-entropy strings. It can miss
+  secrets and can flag harmless strings.
+- Waivers are time-limited and are the owner's decision. An expired waiver stops
+  suppressing the finding.
+- The seeded fixtures show that each gate catches its own known cases. They do not
+  show that the gates catch issues in other code.
+- Reuse from other repositories is pinned to a commit SHA. While ShipSafe is
+  private, callers need Actions access to this repository.
