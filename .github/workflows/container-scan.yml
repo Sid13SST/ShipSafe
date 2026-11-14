@@ -1,0 +1,99 @@
+# Reusable container-scan gate (Trivy, pinned binary).
+#
+# Builds the image from `context`, then runs scripts/container_scan.py twice:
+#   image mode  - fails on HIGH/CRITICAL vulnerabilities that have a fixed
+#                 version, any image-config misconfiguration, any secret in the
+#                 image config, or an end-of-support OS;
+#   config mode - fails on any Dockerfile/IaC misconfiguration under
+#                 `config-dir` (fixtures/ skipped and forbidden).
+# Both fail closed (stale DB, no OS detected, nothing scanned, suppression
+# attempts, tool errors).
+#
+# SUPPLY CHAIN: deliberately does NOT use aquasecurity/trivy-action,
+# aquasecurity/setup-trivy or a Trivy container image - their tags/images were
+# compromised in March 2026 (CVE-2026-33634). Trivy is installed from the
+# release tarball with a SHA-256 pinned in scripts/install_trivy.sh.
+#
+# TIME-VARIANCE: results depend on the Trivy vulnerability DB on the day of
+# the run. A newly published advisory or fix can turn an unchanged image red.
+# A pass is "nothing fixable at HIGH/CRITICAL in today's DB", not a guarantee.
+#
+# Current scope: called from workflows in this repository. Cross-repo
+# packaging is planned - see docs/TASKS.md.
+name: container-scan (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Docker build context for the image under test.
+        required: false
+        type: string
+        default: demo-app
+      image:
+        description: Local tag to build and scan.
+        required: false
+        type: string
+        default: shipsafe-demo:ci
+      config-dir:
+        description: Directory for the Trivy config (misconfiguration) scan.
+        required: false
+        type: string
+        default: "."
+      skip-dirs:
+        description: Space-separated directories the config scan skips.
+        required: false
+        type: string
+        default: fixtures
+      forbid-paths:
+        description: Space-separated paths the config scan must never include.
+        required: false
+        type: string
+        default: fixtures/
+      python-version:
+        description: Python version used to run the gate script.
+        required: false
+        type: string
+        default: "3.13"
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: trivy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install pinned Trivy (checksum verified)
+        run: |
+          bash scripts/install_trivy.sh "$RUNNER_TEMP/trivy-bin"
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+      - name: Build image under test
+        env:
+          CONTEXT: ${{ inputs.context }}
+          IMAGE: ${{ inputs.image }}
+        run: docker build --pull -t "$IMAGE" "$CONTEXT"
+      - name: Scan image (vulnerabilities + image config)
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: python scripts/container_scan.py image "$IMAGE" --image-src docker
+      - name: Scan Dockerfiles / IaC (misconfigurations)
+        if: ${{ !cancelled() }}
+        env:
+          CONFIG_DIR: ${{ inputs.config-dir }}
+          SKIP: ${{ inputs.skip-dirs }}
+          FORBID: ${{ inputs.forbid-paths }}
+        run: |
+          read -r -a skips <<< "$SKIP"
+          read -r -a forbids <<< "$FORBID"
+          args=(config "$CONFIG_DIR")
+          for d in "${skips[@]}"; do args+=(--skip-dir "$d"); done
+          for f in "${forbids[@]}"; do args+=(--forbid-path "$f"); done
+          python scripts/container_scan.py "${args[@]}"
