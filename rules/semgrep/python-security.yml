@@ -1,0 +1,183 @@
+# ShipSafe vendored Semgrep rules - Python / FastAPI.
+#
+# Small, hand-reviewed rule set run fully offline (no Semgrep login, no
+# registry download). Each rule has positive (ruleid) and negative (ok)
+# annotated cases in python-security.py next to this file, checked by `semgrep --test`.
+#
+# Severity drives the gate (scripts/sast.py): ERROR and WARNING fail the
+# build; INFO is reported but does not fail it.
+#
+# Coverage is deliberately narrow. These patterns catch common, obvious
+# misuse; they do not find logic flaws, and Semgrep OSS taint tracking is
+# intra-procedural (it does not follow data across function boundaries).
+rules:
+  - id: shipsafe.fastapi-input-to-shell
+    severity: ERROR
+    message: >-
+      A FastAPI route parameter flows into a shell command. An attacker who
+      controls the parameter can run arbitrary commands. Pass an argument list
+      without shell=True and validate the input.
+    languages: [python]
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      category: security
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              @$APP.$METHOD(...)
+              def $HANDLER(..., $PARAM, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|patch|delete|api_route)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$METHOD(...)
+              async def $HANDLER(..., $PARAM, ...):
+                ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|patch|delete|api_route)$
+          - pattern: $PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: subprocess.$FN($CMD, ..., shell=True, ...)
+              - pattern: os.system($CMD)
+              - pattern: os.popen($CMD, ...)
+          - focus-metavariable: $CMD
+
+  - id: shipsafe.subprocess-shell-true
+    severity: WARNING
+    message: >-
+      subprocess called with shell=True. If any part of the command comes from
+      outside the program this is command injection. Prefer an argument list
+      with shell=False.
+    languages: [python]
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      category: security
+    patterns:
+      - pattern: subprocess.$FN(..., shell=True, ...)
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput)$
+
+  - id: shipsafe.os-system-non-literal
+    severity: ERROR
+    message: >-
+      os.system/os.popen with a non-constant command runs it through the
+      shell. Use subprocess with an argument list instead.
+    languages: [python]
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD, ...)
+      - pattern-not: os.system("...")
+      - pattern-not: os.popen("...", ...)
+
+  - id: shipsafe.yaml-unsafe-load
+    severity: ERROR
+    message: >-
+      yaml.load without a safe Loader (or yaml.unsafe_load) can construct
+      arbitrary Python objects from untrusted YAML. Use yaml.safe_load.
+    languages: [python]
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      category: security
+    pattern-either:
+      - pattern: yaml.unsafe_load(...)
+      - pattern: yaml.load(..., Loader=yaml.Loader, ...)
+      - pattern: yaml.load(..., Loader=yaml.UnsafeLoader, ...)
+      - patterns:
+          - pattern: yaml.load(...)
+          - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=CSafeLoader, ...)
+
+  - id: shipsafe.eval-exec-non-literal
+    severity: ERROR
+    message: >-
+      eval/exec on a non-constant value executes arbitrary code if the value
+      can be influenced from outside. Use ast.literal_eval or explicit parsing.
+    languages: [python]
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: eval($X, ...)
+          - pattern: exec($X, ...)
+      - pattern-not: eval("...", ...)
+      - pattern-not: exec("...", ...)
+
+  - id: shipsafe.sql-string-formatting
+    severity: ERROR
+    message: >-
+      SQL built with string formatting or concatenation and passed to
+      execute(). Use parameterised queries (execute(sql, params)).
+    languages: [python]
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+      category: security
+    pattern-either:
+      - pattern: $CUR.execute(f"...", ...)
+      - pattern: $CUR.execute("..." % $ARGS, ...)
+      - pattern: $CUR.execute("...".format(...), ...)
+      - pattern: $CUR.execute("..." + $X, ...)
+      - pattern: $CUR.executemany(f"...", ...)
+
+  - id: shipsafe.pickle-load
+    severity: WARNING
+    message: >-
+      pickle deserialisation can execute arbitrary code. Never unpickle data
+      that could come from an untrusted source; prefer JSON.
+    languages: [python]
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      category: security
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)
+
+  - id: shipsafe.requests-verify-false
+    severity: WARNING
+    message: >-
+      TLS certificate verification disabled (verify=False). Traffic can be
+      intercepted. Remove verify=False or point verify at a CA bundle.
+    languages: [python]
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+      category: security
+    patterns:
+      - pattern: requests.$FN(..., verify=False, ...)
+
+  - id: shipsafe.fastapi-cors-wildcard-credentials
+    severity: WARNING
+    message: >-
+      CORS allows any origin together with credentials. Restrict
+      allow_origins to known origins.
+    languages: [python]
+    metadata:
+      cwe: "CWE-942: Permissive Cross-domain Policy"
+      category: security
+    pattern: $APP.add_middleware(CORSMiddleware, ..., allow_origins=["*"], ..., allow_credentials=True, ...)
+
+  - id: shipsafe.weak-hash
+    severity: INFO
+    message: >-
+      MD5/SHA-1 are not collision resistant. Fine for non-security checksums;
+      use SHA-256+ (or a password hash such as argon2/bcrypt) for security.
+    languages: [python]
+    metadata:
+      cwe: "CWE-328: Use of Weak Hash"
+      category: security
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)

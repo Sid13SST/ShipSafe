@@ -1,0 +1,8 @@
+# DELIBERATELY VULNERABLE/INVALID FIXTURE - an EXPIRED waiver.
+# Used only by scripts/verify_waivers.sh to prove that an expired waiver
+# FAILS the gate (exit 1) even though the finding it names is waived no more.
+waivers:
+  - id: SS001
+    gate: dockerfile-lint
+    reason: "Fixture: this waiver expired long ago and must fail the gate"
+    expires: 2020-01-01

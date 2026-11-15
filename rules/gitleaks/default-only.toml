@@ -1,0 +1,8 @@
+# Gitleaks built-in default rules with NO allowlist.
+# Used by scripts/verify_secrets.sh to scan fixtures/ (which .gitleaks.toml
+# allowlists) and to prove that fixtures/ is the only thing the project
+# allowlist hides. Not used for the real project gate.
+title = "ShipSafe default rules, no allowlist"
+
+[extend]
+useDefault = true

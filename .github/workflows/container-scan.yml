@@ -1,0 +1,148 @@
+# Reusable container-scan gate (Trivy, pinned binary).
+#
+# Builds the image from `context`, then runs scripts/container_scan.py twice:
+# Default policy (ShipSafe's chosen default for the repo owner to review; not
+# a guarantee, and reported-only findings are not "accepted"):
+#   image mode  - fails on HIGH/CRITICAL vulnerabilities that have a fixed
+#                 version, any image-config misconfiguration, any secret in the
+#                 image config, or an end-of-support OS;
+#   config mode - fails on any Dockerfile/IaC misconfiguration under
+#                 `config-dir` (fixtures/ skipped and forbidden).
+# Both fail closed (stale DB, no OS detected, nothing scanned, suppression
+# attempts, tool errors).
+#
+# SUPPLY CHAIN: deliberately does NOT use aquasecurity/trivy-action,
+# aquasecurity/setup-trivy or a Trivy container image - their tags/images were
+# compromised in March 2026 (CVE-2026-33634). Trivy is installed from the
+# release tarball with a SHA-256 pinned in scripts/install_trivy.sh.
+#
+# TIME-VARIANCE: results depend on the Trivy vulnerability DB on the day of
+# the run. A newly published advisory or fix can turn an unchanged image red.
+# A pass is "nothing fixable at HIGH/CRITICAL in today's DB", not a guarantee.
+#
+# Reuse: runs ShipSafe's scripts from a separate checkout of the tooling
+# repository at a pinned commit (see docs/REUSE.md). The caller's workspace
+# supplies only the code to scan and its .shipsafe/waivers.yml.
+name: container-scan (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Docker build context for the image under test.
+        required: false
+        type: string
+        default: demo-app
+      image:
+        description: Local tag to build and scan.
+        required: false
+        type: string
+        default: shipsafe-demo:ci
+      config-dir:
+        description: Directory for the Trivy config (misconfiguration) scan.
+        required: false
+        type: string
+        default: "."
+      skip-dirs:
+        description: Space-separated directories the config scan skips.
+        required: false
+        type: string
+        default: fixtures
+      forbid-paths:
+        description: Space-separated paths the config scan must never include.
+        required: false
+        type: string
+        default: fixtures/
+      python-version:
+        description: Python version used to run the gate script.
+        required: false
+        type: string
+        default: "3.13"
+      tooling-repository:
+        description: >-
+          Repository that provides ShipSafe's gate scripts. Empty = the calling
+          repository (ShipSafe's own CI). Cross-repo callers set "Sid13SST/ShipSafe".
+        required: false
+        type: string
+        default: ""
+      tooling-ref:
+        description: >-
+          Commit of the tooling to run. Empty = the triggering commit. Cross-repo
+          callers MUST pass the full 40-character SHA used in their `uses:` line.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      tooling-token:
+        description: Read-only token for the tooling repository (only needed while it is private).
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: trivy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve ShipSafe tooling ref
+        id: tooling
+        env:
+          TOOLING_REPO: ${{ inputs.tooling-repository || github.repository }}
+          TOOLING_REF: ${{ inputs.tooling-ref || github.sha }}
+          CALLER_REPO: ${{ github.repository }}
+        run: |
+          if [ "$TOOLING_REPO" != "$CALLER_REPO" ] && ! [[ "$TOOLING_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tooling-ref must be a full 40-character commit SHA when ShipSafe runs from another repository (got '$TOOLING_REF'). Branches and tags can move."
+            exit 1
+          fi
+          echo "repo=$TOOLING_REPO" >> "$GITHUB_OUTPUT"
+          echo "ref=$TOOLING_REF" >> "$GITHUB_OUTPUT"
+      - name: Check out ShipSafe tooling at the pinned ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.tooling.outputs.repo }}
+          ref: ${{ steps.tooling.outputs.ref }}
+          token: ${{ secrets.tooling-token || github.token }}
+          path: .shipsafe-tooling
+          persist-credentials: false
+      - name: Move tooling out of the scanned workspace
+        env:
+          TOOLING_REPO: ${{ steps.tooling.outputs.repo }}
+        run: |
+          mv .shipsafe-tooling "$RUNNER_TEMP/shipsafe"
+          echo "SHIPSAFE=$RUNNER_TEMP/shipsafe" >> "$GITHUB_ENV"
+          echo "ShipSafe tooling $(git -C "$RUNNER_TEMP/shipsafe" rev-parse HEAD) from $TOOLING_REPO"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install pinned Trivy (checksum verified)
+        run: |
+          bash "$SHIPSAFE/scripts/install_trivy.sh" "$RUNNER_TEMP/trivy-bin"
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+      - name: Build image under test
+        env:
+          CONTEXT: ${{ inputs.context }}
+          IMAGE: ${{ inputs.image }}
+        run: docker build --pull -t "$IMAGE" "$CONTEXT"
+      - name: Scan image (vulnerabilities + image config)
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: python "$SHIPSAFE/scripts/container_scan.py" image "$IMAGE" --image-src docker
+      - name: Scan Dockerfiles / IaC (misconfigurations)
+        if: ${{ !cancelled() }}
+        env:
+          CONFIG_DIR: ${{ inputs.config-dir }}
+          SKIP: ${{ inputs.skip-dirs }}
+          FORBID: ${{ inputs.forbid-paths }}
+        run: |
+          read -r -a skips <<< "$SKIP"
+          read -r -a forbids <<< "$FORBID"
+          args=(config "$CONFIG_DIR")
+          for d in "${skips[@]}"; do args+=(--skip-dir "$d"); done
+          for f in "${forbids[@]}"; do args+=(--forbid-path "$f"); done
+          python "$SHIPSAFE/scripts/container_scan.py" "${args[@]}"

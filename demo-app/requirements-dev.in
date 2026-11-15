@@ -1,0 +1,5 @@
+# Test-only dependencies. requirements-dev.txt is the hash-pinned lock;
+# constrained to the runtime lock so shared packages resolve identically.
+-c requirements.txt
+pytest==9.2.0
+httpx==0.28.1

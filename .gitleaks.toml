@@ -1,0 +1,20 @@
+# ShipSafe Gitleaks config for the PROJECT scan.
+#
+# = Gitleaks' built-in default rules + exactly one allowlist: fixtures/.
+#
+# fixtures/ holds deliberately fake tokens that exist to prove the secrets
+# gate fails (see fixtures/README.md). They are allowlisted here by path and
+# nothing else: no regex, stopword or commit allowlists, no rule overrides.
+# scripts/tests/test_secrets_scan.py fails if this file grows any other
+# suppression, so widening it needs a deliberate, reviewed change.
+#
+# Inline `gitleaks:allow` comments are ignored by the gate
+# (--ignore-gitleaks-allow) and any .gitleaksignore file makes the gate error.
+title = "ShipSafe project scan"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deliberately fake secrets used only by the secrets-gate self-test"
+paths = ['''^(\./)?fixtures/''']

@@ -1,0 +1,121 @@
+# Reusable SAST gate (Semgrep OSS CLI, vendored rules, offline).
+#
+# Fails the job on ERROR/WARNING-severity findings from the vendored rules in
+# rules/semgrep/, or when the scan cannot be trusted (fails closed). No Semgrep
+# account, token, or registry download is used. A pass means "these patterns
+# did not match", not that the code is free of vulnerabilities.
+#
+# Reuse: runs ShipSafe's scripts from a separate checkout of the tooling
+# repository at a pinned commit (see docs/REUSE.md). The caller's workspace
+# supplies only the code to scan and its .shipsafe/waivers.yml.
+name: sast (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      targets:
+        description: Space-separated files/directories to scan.
+        required: true
+        type: string
+      exclude:
+        description: Space-separated path patterns passed to semgrep --exclude.
+        required: false
+        type: string
+        default: ""
+      forbid-paths:
+        description: Space-separated paths that must never be scanned (gate errors if they are).
+        required: false
+        type: string
+        default: ""
+      python-version:
+        description: Python version used to run Semgrep and the gate script.
+        required: false
+        type: string
+        default: "3.13"
+      tooling-repository:
+        description: >-
+          Repository that provides ShipSafe's gate scripts. Empty = the calling
+          repository (ShipSafe's own CI). Cross-repo callers set "Sid13SST/ShipSafe".
+        required: false
+        type: string
+        default: ""
+      tooling-ref:
+        description: >-
+          Commit of the tooling to run. Empty = the triggering commit. Cross-repo
+          callers MUST pass the full 40-character SHA used in their `uses:` line.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      tooling-token:
+        description: Read-only token for the tooling repository (only needed while it is private).
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: semgrep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve ShipSafe tooling ref
+        id: tooling
+        env:
+          TOOLING_REPO: ${{ inputs.tooling-repository || github.repository }}
+          TOOLING_REF: ${{ inputs.tooling-ref || github.sha }}
+          CALLER_REPO: ${{ github.repository }}
+        run: |
+          if [ "$TOOLING_REPO" != "$CALLER_REPO" ] && ! [[ "$TOOLING_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tooling-ref must be a full 40-character commit SHA when ShipSafe runs from another repository (got '$TOOLING_REF'). Branches and tags can move."
+            exit 1
+          fi
+          echo "repo=$TOOLING_REPO" >> "$GITHUB_OUTPUT"
+          echo "ref=$TOOLING_REF" >> "$GITHUB_OUTPUT"
+      - name: Check out ShipSafe tooling at the pinned ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.tooling.outputs.repo }}
+          ref: ${{ steps.tooling.outputs.ref }}
+          token: ${{ secrets.tooling-token || github.token }}
+          path: .shipsafe-tooling
+          persist-credentials: false
+      - name: Move tooling out of the scanned workspace
+        env:
+          TOOLING_REPO: ${{ steps.tooling.outputs.repo }}
+        run: |
+          mv .shipsafe-tooling "$RUNNER_TEMP/shipsafe"
+          echo "SHIPSAFE=$RUNNER_TEMP/shipsafe" >> "$GITHUB_ENV"
+          echo "ShipSafe tooling $(git -C "$RUNNER_TEMP/shipsafe" rev-parse HEAD) from $TOOLING_REPO"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install pinned scan tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r "$SHIPSAFE/scripts/requirements-tools.txt"
+      - name: Run SAST gate
+        env:
+          TARGETS: ${{ inputs.targets }}
+          EXCLUDE: ${{ inputs.exclude }}
+          FORBID: ${{ inputs.forbid-paths }}
+          SEMGREP_ENABLE_VERSION_CHECK: "0"
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          read -r -a targets <<< "$TARGETS"
+          read -r -a excludes <<< "$EXCLUDE"
+          read -r -a forbids <<< "$FORBID"
+          args=("${targets[@]}")
+          for e in "${excludes[@]}"; do args+=(--exclude "$e"); done
+          for f in "${forbids[@]}"; do args+=(--forbid-path "$f"); done
+          python "$SHIPSAFE/scripts/sast.py" --report semgrep-report.json "${args[@]}"
+      - name: Upload raw Semgrep report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: semgrep-report
+          path: semgrep-report.json
+          if-no-files-found: ignore
+          retention-days: 7

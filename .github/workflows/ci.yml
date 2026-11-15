@@ -1,0 +1,231 @@
+# ShipSafe CI: demo-app tests, gate unit tests, the security gates (dependency
+# audit, SAST, secrets, Dockerfile lint, container scan) on the clean project,
+# a demo image build check, and gate self-tests against the deliberately
+# vulnerable fixtures/ (which must FAIL each gate).
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo-app-tests:
+    name: demo-app tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install demo-app dependencies
+        working-directory: demo-app
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements.txt -r requirements-dev.txt
+      - name: Run demo-app tests
+        working-directory: demo-app
+        run: python -m pytest -q
+
+  gate-unit-tests:
+    name: gate unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install test runner
+        run: python -m pip install --disable-pip-version-check --require-hashes -r demo-app/requirements-dev.txt
+      - name: Run gate unit tests (offline)
+        run: python -m pytest -q scripts/tests
+
+  dependency-audit:
+    name: gate - dependency audit (demo-app)
+    uses: ./.github/workflows/dependency-audit.yml
+    with:
+      requirements: demo-app/requirements.txt demo-app/requirements-dev.txt
+
+  dependency-audit-self-test:
+    name: self-test - dependency audit catches fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned audit tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r scripts/requirements-tools.txt
+      - name: Assert gate passes on demo-app and fails on fixtures/
+        run: bash scripts/verify_dependency_audit.sh
+
+  sast:
+    name: gate - SAST (project, fixtures/ excluded)
+    uses: ./.github/workflows/sast.yml
+    with:
+      # Scan the whole repo so new code is covered by default. fixtures/ and
+      # the rule test file are deliberately vulnerable and excluded; the gate
+      # errors if anything under fixtures/ is scanned anyway.
+      targets: .
+      exclude: fixtures/ rules/semgrep/python-security.py
+      forbid-paths: fixtures/
+
+  sast-self-test:
+    name: self-test - SAST catches fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned scan tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r scripts/requirements-tools.txt
+      - name: Assert rule tests pass, gate passes on project and fails on fixtures/
+        run: bash scripts/verify_sast.sh
+
+  secrets:
+    name: gate - secrets (full git history, fixtures/ allowlisted)
+    uses: ./.github/workflows/secrets.yml
+    with:
+      mode: git
+      target: .
+      config: .gitleaks.toml
+
+  secrets-self-test:
+    name: self-test - secrets gate catches fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the self-test also runs the git-history scan
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned Gitleaks (checksum verified)
+        run: |
+          bash scripts/install_gitleaks.sh "$RUNNER_TEMP/gitleaks-bin"
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+      - name: Assert gate passes on project and fails on fixtures/
+        run: bash scripts/verify_secrets.sh
+
+  dockerfile-lint:
+    name: gate - Dockerfile lint (fixtures/ excluded)
+    uses: ./.github/workflows/dockerfile-lint.yml
+    with:
+      discover: .
+      exclude: fixtures/
+      forbid-paths: fixtures/
+
+  dockerfile-lint-self-test:
+    name: self-test - Dockerfile gate catches fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned hadolint (checksum verified)
+        run: |
+          bash scripts/install_hadolint.sh "$RUNNER_TEMP/hadolint-bin"
+          echo "$RUNNER_TEMP/hadolint-bin" >> "$GITHUB_PATH"
+      - name: Assert gate passes on project and fails on fixtures/
+        run: bash scripts/verify_dockerfile_lint.sh
+
+  demo-image:
+    name: demo image builds and runs as non-root
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build demo-app image and check uid, healthcheck and API
+        run: bash scripts/verify_demo_image.sh demo-app
+
+  container-scan:
+    name: gate - container scan (demo image + config, fixtures/ skipped)
+    uses: ./.github/workflows/container-scan.yml
+    with:
+      context: demo-app
+      image: shipsafe-demo:ci
+      config-dir: .
+      skip-dirs: fixtures
+      forbid-paths: fixtures/
+
+  container-scan-self-test:
+    name: self-test - container scan catches fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned Trivy (checksum verified)
+        run: |
+          bash scripts/install_trivy.sh "$RUNNER_TEMP/trivy-bin"
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+      - name: Assert gate passes on project and fails on fixtures/ (old image read remotely, never run)
+        run: bash scripts/verify_container_scan.sh
+
+  waivers-self-test:
+    name: self-test - waivers (active passes, expired fails, invalid errors)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned scan tooling
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r scripts/requirements-tools.txt
+          bash scripts/install_hadolint.sh "$RUNNER_TEMP/hadolint-bin"
+          echo "$RUNNER_TEMP/hadolint-bin" >> "$GITHUB_PATH"
+      - name: Assert waiver semantics with the real gate tools
+        run: bash scripts/verify_waivers.sh
+
+  reuse-self-test:
+    name: self-test - gates run from a separate tooling checkout against another repo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned tooling (hash- and checksum-verified)
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r scripts/requirements-tools.txt
+          for t in gitleaks hadolint trivy; do bash "scripts/install_$t.sh" "$RUNNER_TEMP/bin"; done
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Simulate a consumer repository
+        run: bash scripts/verify_reuse.sh

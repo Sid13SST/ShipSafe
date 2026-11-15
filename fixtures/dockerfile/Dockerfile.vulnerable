@@ -1,0 +1,16 @@
+# DELIBERATELY VULNERABLE FIXTURE - DO NOT BUILD, RUN, OR COPY.
+#
+# Used only by scripts/verify_dockerfile_lint.sh to prove the Dockerfile gate
+# FAILS on common Dockerfile mistakes. It is linted as text and never built.
+# The URL uses the reserved .invalid TLD (RFC 2606), so it can never resolve,
+# and the "secret" is a placeholder, not a credential.
+MAINTAINER nobody@example.invalid
+FROM python:latest
+ENV API_TOKEN=placeholder-not-a-secret
+ADD https://downloads.example.invalid/tool.tar.gz /opt/tool.tar.gz
+RUN apt-get update && apt-get install -y curl
+RUN pip install flask
+RUN cd /opt && tar -xzf tool.tar.gz
+RUN curl -fsSL https://downloads.example.invalid/install.sh | sh
+USER root
+CMD python app.py

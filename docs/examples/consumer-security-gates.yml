@@ -1,0 +1,67 @@
+# EXAMPLE - not active in this repository. Copy to .github/workflows/ in the
+# repository you want to scan and replace every 0000...0000 with the full
+# 40-character SHA of the ShipSafe commit you have reviewed (the same SHA in
+# `uses:` and in `tooling-ref`). See docs/REUSE.md.
+#
+# These are automated checks in CI, not a security guarantee: a green run
+# means these tools, with these rules and today's advisory data, found nothing.
+name: security-gates
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    uses: Sid13SST/ShipSafe/.github/workflows/dependency-audit.yml@0000000000000000000000000000000000000000 # ShipSafe, reviewed commit
+    with:
+      requirements: requirements.txt   # fully pinned (ideally hash-pinned) lock files
+      tooling-repository: Sid13SST/ShipSafe
+      tooling-ref: "0000000000000000000000000000000000000000"
+    secrets:
+      tooling-token: ${{ secrets.SHIPSAFE_READ_TOKEN }}  # only while ShipSafe is private
+
+  sast:
+    uses: Sid13SST/ShipSafe/.github/workflows/sast.yml@0000000000000000000000000000000000000000 # ShipSafe, reviewed commit
+    with:
+      targets: .
+      exclude: tests/fixtures/          # anything deliberately vulnerable in YOUR repo
+      forbid-paths: tests/fixtures/
+      tooling-repository: Sid13SST/ShipSafe
+      tooling-ref: "0000000000000000000000000000000000000000"
+    secrets:
+      tooling-token: ${{ secrets.SHIPSAFE_READ_TOKEN }}
+
+  secrets:
+    uses: Sid13SST/ShipSafe/.github/workflows/secrets.yml@0000000000000000000000000000000000000000 # ShipSafe, reviewed commit
+    with:
+      mode: git                         # full history; config = your ./.gitleaks.toml or default rules
+      tooling-repository: Sid13SST/ShipSafe
+      tooling-ref: "0000000000000000000000000000000000000000"
+    secrets:
+      tooling-token: ${{ secrets.SHIPSAFE_READ_TOKEN }}
+
+  dockerfile-lint:
+    uses: Sid13SST/ShipSafe/.github/workflows/dockerfile-lint.yml@0000000000000000000000000000000000000000 # ShipSafe, reviewed commit
+    with:
+      discover: .
+      tooling-repository: Sid13SST/ShipSafe
+      tooling-ref: "0000000000000000000000000000000000000000"
+    secrets:
+      tooling-token: ${{ secrets.SHIPSAFE_READ_TOKEN }}
+
+  container-scan:
+    uses: Sid13SST/ShipSafe/.github/workflows/container-scan.yml@0000000000000000000000000000000000000000 # ShipSafe, reviewed commit
+    with:
+      context: .                        # your Docker build context
+      image: my-app:ci
+      config-dir: .
+      skip-dirs: ""
+      forbid-paths: ""
+      tooling-repository: Sid13SST/ShipSafe
+      tooling-ref: "0000000000000000000000000000000000000000"
+    secrets:
+      tooling-token: ${{ secrets.SHIPSAFE_READ_TOKEN }}

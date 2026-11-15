@@ -1,0 +1,9 @@
+# DELIBERATELY VULNERABLE FIXTURE - DO NOT INSTALL.
+# Used only by scripts/verify_dependency_audit.sh to prove the dependency-audit
+# gate fails on known-vulnerable pins. These versions are old and have public
+# advisories (e.g. PYSEC/GHSA entries in the PyPI/OSV advisory data). The gate
+# audits this file without installing anything (--no-deps --disable-pip).
+requests==2.19.1
+jinja2==2.10
+pyyaml==5.3
+urllib3==1.24.1
