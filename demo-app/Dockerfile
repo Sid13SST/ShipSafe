@@ -10,7 +10,7 @@
 # - Runs as a dedicated non-root user (uid/gid 10001).
 # - No build args, secrets, or credentials are used or baked in.
 # Build: docker build -t shipsafe-demo demo-app/
-FROM python:3.13.18-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+FROM python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
